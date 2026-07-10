@@ -183,6 +183,13 @@ try {
 }
 
 // ── 3. publish ───────────────────────────────────────────────────────────────
+// Rebase onto the remote first: several bakers push to the same branch (the
+// production runtime, dev machines), and committing on a stale base gets the
+// push rejected as non-fast-forward. Artifact filenames are content-hashed, so
+// rebasing never conflicts. Offline/no-upstream is fine — push has its own retry.
+if (process.env.UGC_NO_PUSH !== '1' && git('remote')) {
+  try { git('pull', '--rebase', 'origin', branch); } catch { log('pre-commit pull failed (offline?) — continuing'); }
+}
 git('add', htmlPath, payloadPath);
 git('commit', '-m', `bake: ${relHtml} — "${pack.name ?? slug}" (${tpl})\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>`);
 log(`committed ${git('rev-parse', '--short', 'HEAD')}`);
