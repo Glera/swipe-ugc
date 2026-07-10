@@ -17,6 +17,7 @@ TODOs): `feed-prototype/ISLAND.md` in the workspace.
 u/<user>/<slug>-<hash8>.html          baked fork (shell)
 u/<user>/<slug>-<hash8>.payload.js    baked fork (payload with the theme applied)
 worker/bake.mjs                       recipe → bake → test → publish → notify
+recipes/sort/                         canonical recipe, constraints, AI prompt
 ```
 
 The content hash in the filename makes every artifact immutable: a new version
@@ -35,6 +36,13 @@ the recipe (marble-palette substitution in the payload), write the fork under
 from the workspace root `node_modules` — the worker currently assumes it runs
 inside the workspace), then `git commit` + `push`, then notify the player via
 the Telegram bot.
+
+`recipes/sort/` is the source of truth for the base build, source palette, pack
+constraints, and AI theme prompt. Both the worker and feed Vite config use
+`recipe.mjs`; the Python backend reads the same JSON/text files at runtime.
+Production `RESULT` is emitted only after both artifact files are verified in
+the remote branch. A local commit left by a failed push is retried on the next
+identical bake instead of being mistaken for a published artifact.
 
 In dev the worker is invoked automatically by the feed dev server only after a
 player confirms/builds the mechanic (`feed-prototype/vite.config.ts` →
