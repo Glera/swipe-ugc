@@ -55,7 +55,7 @@ const git = (...a) => execFileSync('git', a, { cwd: repoRoot, encoding: 'utf8' }
 const gitOk = (...a) => {
   try { git(...a); return true; } catch { return false; }
 };
-const branch = process.env.UGC_REPO_BRANCH || git('branch', '--show-current') || 'master';
+const branch = process.env.UGC_REPO_BRANCH || git('rev-parse', '--abbrev-ref', 'HEAD') || 'master';
 const emitResult = (rel) => console.log(`RESULT ${JSON.stringify({ rel })}`);
 const remoteHas = (...paths) => {
   try {
