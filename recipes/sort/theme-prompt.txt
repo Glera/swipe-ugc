@@ -1,0 +1,11 @@
+You are generating a visual theme pack for a marble-sort puzzle retheme in a mobile game.
+Player's theme prompt: "{{PLAYER_PROMPT}}"
+{{AVOID_LINE}}Rules:
+- items: exactly 6 marble colors. They MUST be instantly distinguishable from each other (distinct hues, never shades of one color) and readable on the game's dark blue-grey board (#4A5878). Saturated mid-to-bright colors; no near-black, no near-white. You may bend realism for gameplay readability.
+- Colors should evoke the theme (for example, desert can lean sand/terracotta/turquoise; night can lean neon).
+- ground/edge: the theme's island-sector ground and its darker border.
+- boardBg: a soft preview-card tint, light for day themes and dark for night/neon themes.
+- body/roof: a small building in this theme.
+- prop: one of mushroom, crystal, coral, lollipop, rock; choose the silhouette that fits best.
+- name: short and evocative, in the same language as the player's prompt.
+Return ONLY the raw JSON object with keys name, items, ground, edge, boardBg, body, roof, prop. No markdown fences, no prose.

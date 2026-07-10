@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "template": "sort",
+  "baseBuild": "marble-sort-swipe",
+  "sourcePalette": [
+    "#F5C842",
+    "#5BC8D8",
+    "#FF9F43",
+    "#FF7B7B",
+    "#B07BFF",
+    "#7BE87B"
+  ],
+  "payloadScript": "./payload.js",
+  "boardColor": "#4A5878",
+  "pack": {
+    "itemCount": 6,
+    "hexPattern": "^#[0-9A-Fa-f]{6}$",
+    "minPairwiseRgbDistance": 90,
+    "props": ["mushroom", "crystal", "coral", "lollipop", "rock"],
+    "colorFields": ["ground", "edge", "boardBg", "body", "roof"]
+  }
+}

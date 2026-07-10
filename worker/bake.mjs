@@ -26,6 +26,7 @@ import { createServer } from 'http';
 import { createHash } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { recipe, validatePack } from '../recipes/sort/recipe.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -34,23 +35,8 @@ const playablesRoot = process.env.PLAYABLES_ROOT
   ? path.resolve(process.env.PLAYABLES_ROOT)
   : path.join(workspace, 'playables');
 
-// Same recipe constants as the client fork (feed-prototype/src/island.ts).
-const SORT_MARBLES = ['#F5C842', '#5BC8D8', '#FF9F43', '#FF7B7B', '#B07BFF', '#7BE87B'];
-const BASE_BUILDS = { sort: 'marble-sort-swipe' };
-const HEX = /^#[0-9A-Fa-f]{6}$/;
-const PROPS = new Set(['mushroom', 'crystal', 'coral', 'lollipop', 'rock']);
-
-function validatePack(p) {
-  if (!p || typeof p !== 'object') return 'pack must be an object';
-  if (!Array.isArray(p.items) || p.items.length !== 6 || !p.items.every((c) => typeof c === 'string' && HEX.test(c)))
-    return 'pack.items must be exactly 6 #RRGGBB colors';
-  for (const key of ['ground', 'edge', 'boardBg', 'body', 'roof']) {
-    if (typeof p[key] !== 'string' || !HEX.test(p[key])) return `pack.${key} must be a #RRGGBB color`;
-  }
-  if (typeof p.name !== 'string' || !p.name.trim()) return 'pack.name must be a non-empty string';
-  if (typeof p.prop !== 'string' || !PROPS.has(p.prop)) return 'pack.prop is invalid';
-  return null;
-}
+const SORT_MARBLES = recipe.sourcePalette;
+const BASE_BUILDS = { [recipe.template]: recipe.baseBuild };
 
 const args = {};
 for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];
@@ -60,6 +46,24 @@ const fail = (m) => {
   for (const f of written) { try { rmSync(f); } catch { /* noop */ } }
   console.error(`[bake] FAIL: ${m}`);
   process.exit(1);
+};
+const abort = (m) => {
+  console.error(`[bake] FAIL: ${m}`);
+  process.exit(1);
+};
+const git = (...a) => execFileSync('git', a, { cwd: repoRoot, encoding: 'utf8' }).trim();
+const gitOk = (...a) => {
+  try { git(...a); return true; } catch { return false; }
+};
+const branch = process.env.UGC_REPO_BRANCH || git('branch', '--show-current') || 'master';
+const emitResult = (rel) => console.log(`RESULT ${JSON.stringify({ rel })}`);
+const remoteHas = (...paths) => {
+  try {
+    git('fetch', '--depth', '1', 'origin', branch);
+    return paths.every((rel) => gitOk('cat-file', '-e', `origin/${branch}:${rel}`));
+  } catch {
+    return false;
+  }
 };
 
 const tpl = args.tpl ?? 'sort';
@@ -92,10 +96,33 @@ const outDir = path.join(repoRoot, 'u', user);
 mkdirSync(outDir, { recursive: true });
 const htmlPath = path.join(outDir, `${id}.html`);
 const payloadPath = path.join(outDir, `${id}.payload.js`);
-if (existsSync(htmlPath)) {
-  log(`already published: u/${user}/${id}.html — nothing to do`);
-  console.log(`RESULT ${JSON.stringify({ rel: `u/${user}/${id}.html` })}`);
-  process.exit(0);
+const relHtml = `u/${user}/${id}.html`;
+const relPayload = `u/${user}/${id}.payload.js`;
+if (existsSync(htmlPath) || existsSync(payloadPath)) {
+  if (existsSync(htmlPath) && existsSync(payloadPath)) {
+    if (process.env.UGC_NO_PUSH === '1') {
+      log(`already baked locally: ${relHtml}`);
+      emitResult(relHtml);
+      process.exit(0);
+    }
+    if (remoteHas(relHtml, relPayload)) {
+      log(`already published and verified in origin/${branch}: ${relHtml}`);
+      emitResult(relHtml);
+      process.exit(0);
+    }
+    const committed = gitOk('cat-file', '-e', `HEAD:${relHtml}`) && gitOk('cat-file', '-e', `HEAD:${relPayload}`);
+    if (committed) {
+      log(`local commit for ${relHtml} is not remote; retrying push`);
+      try { git('push', 'origin', `HEAD:${branch}`); } catch (e) { abort(`retry push failed: ${e.message}`); }
+      if (!remoteHas(relHtml, relPayload)) abort(`push returned but ${relHtml} is still absent from origin/${branch}`);
+      log(`push recovered and verified: ${relHtml}`);
+      emitResult(relHtml);
+      process.exit(0);
+    }
+  }
+  log(`removing incomplete local artifact before rebuild: ${relHtml}`);
+  rmSync(htmlPath, { force: true });
+  rmSync(payloadPath, { force: true });
 }
 writeFileSync(htmlPath, html);
 written.push(htmlPath);
@@ -156,17 +183,21 @@ try {
 }
 
 // ── 3. publish ───────────────────────────────────────────────────────────────
-const git = (...a) => execFileSync('git', a, { cwd: repoRoot, encoding: 'utf8' }).trim();
 git('add', htmlPath, payloadPath);
-git('commit', '-m', `bake: u/${user}/${id} — "${pack.name ?? slug}" (${tpl})\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>`);
+git('commit', '-m', `bake: ${relHtml} — "${pack.name ?? slug}" (${tpl})\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>`);
 log(`committed ${git('rev-parse', '--short', 'HEAD')}`);
 let pushed = false;
 if (process.env.UGC_NO_PUSH === '1') log('push skipped (UGC_NO_PUSH=1)');
-else if (!git('remote')) log('push skipped (no git remote configured)');
-else { git('push'); pushed = true; log('pushed'); }
+else if (!git('remote')) abort('no git remote configured; refusing to return an unpublished URL');
+else {
+  try { git('push', 'origin', `HEAD:${branch}`); } catch (e) { abort(`push failed: ${e.message}`); }
+  if (!remoteHas(relHtml, relPayload)) abort(`push returned but ${relHtml} is absent from origin/${branch}`);
+  pushed = true;
+  log(`pushed and verified in origin/${branch}`);
+}
 
 // ── 4. notify ────────────────────────────────────────────────────────────────
-const relUrl = `u/${user}/${id}.html`;
+const relUrl = relHtml;
 const url = process.env.UGC_BASE_URL ? `${process.env.UGC_BASE_URL.replace(/\/$/, '')}/${relUrl}` : relUrl;
 const text = `🌱 Механика «${pack.name ?? slug}» готова!\n✅ Сгенерирована, протестирована автоплеем и опубликована.\n${url}`;
 // Per-player notification: --chat comes from the player's Telegram initData;
@@ -184,5 +215,5 @@ if (process.env.BOT_TOKEN && chatId) {
 } else {
   log(`notify skipped (${process.env.BOT_TOKEN ? 'no chat id (player outside Telegram, no dev fallback)' : 'no BOT_TOKEN'}); would send:\n${text.split('\n').map((l) => '  | ' + l).join('\n')}`);
 }
-console.log(`RESULT ${JSON.stringify({ rel: relUrl })}`);
+emitResult(relUrl);
 log(`DONE ${relUrl}${pushed ? ' (pushed)' : ''}`);
