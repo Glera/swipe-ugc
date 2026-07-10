@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "kind": "free-experiment",
+  "artifact": "u/dev/wild-sort-cff5d1ac9e.html",
+  "template": "sort",
+  "experimentId": "wild-sort-cff5d1ac9e",
+  "parentId": "shadow-seed",
+  "baseCommit": "2461309119fc530619773429a02915f25760a879",
+  "title": "Теневой Дубль",
+  "version": "cacd656536e6",
+  "htmlBytes": 152467,
+  "payloadBytes": 0,
+  "inlinePayloadBytes": 152467,
+  "assetBytes": 0,
+  "assets": [],
+  "mediaBytes": 0,
+  "mountCost": "medium",
+  "autoplayPassed": true,
+  "attempts": 2
+}
