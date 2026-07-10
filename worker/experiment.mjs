@@ -2,8 +2,9 @@
 /**
  * Local-only T3 experiment worker.
  *
- * Claude Code may edit only marble-sort-swipe/src inside a detached worktree.
- * This process owns the trust boundary: it validates the diff, builds with the
+ * Claude Code or Codex may edit only marble-sort-swipe/src inside a disposable
+ * clone pinned to an exact commit/tree. The release checkout and its refs are
+ * never writable by the agent. This process validates the diff, builds with the
  * known toolchain, and requires a complete headless autoplay WIN before exposing
  * an artifact under the ignored u/local-experiments directory.
  */
@@ -136,7 +137,9 @@ const FORBIDDEN = [
   [/\blocation\s*=|\blocation\.(?:href|assign|replace)\s*[=(]/i, 'navigation'],
 ];
 
-async function validateDiff(worktree) {
+async function validateDiff(worktree, baseCommit) {
+  const head = (await runChecked('git', ['rev-parse', 'HEAD'], { cwd: worktree })).trim();
+  if (head !== baseCommit) fail('agent changed git history inside the disposable clone');
   const porcelain = await runChecked('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: worktree });
   // Do not trim the whole porcelain stream: the leading space in " M path"
   // is the first status column, not whitespace.
@@ -383,7 +386,10 @@ try {
   worktree = mkdtempSync(path.join(tmpdir(), 'swipe-wild-sort-'));
   rmSync(worktree, { recursive: true, force: true });
   status('fork', parent ? 'Restoring the parent experiment in an isolated fork' : 'Creating an isolated mechanic fork');
-  await runChecked('git', ['worktree', 'add', '--detach', worktree, baseCommit], { cwd: playablesRoot, timeoutMs: 60000 });
+  await runChecked('git', ['clone', '--shared', '--no-checkout', playablesRoot, worktree], { cwd: workspace, timeoutMs: 60000 });
+  await runChecked('git', ['checkout', '--detach', baseCommit], { cwd: worktree, timeoutMs: 60000 });
+  const cloneHead = (await runChecked('git', ['rev-parse', 'HEAD'], { cwd: worktree })).trim();
+  if (cloneHead !== baseCommit) fail('disposable clone did not resolve the pinned baseline commit');
   const dependencies = path.join(playablesRoot, 'node_modules');
   if (!existsSync(dependencies)) fail('playables/node_modules is missing; run npm ci before starting the local lab');
   symlinkSync(dependencies, path.join(worktree, 'node_modules'), 'dir');
@@ -394,7 +400,7 @@ try {
     try {
       agentSummary = await invokeAgent(worktree, attempt, lastFailure);
       status('safety', 'Checking the code sandbox and patch budget', attempt);
-      validated = await validateDiff(worktree);
+      validated = await validateDiff(worktree, baseCommit);
       if (parent && validated.patch === readFileSync(parent.patchPath, 'utf8')) {
         throw new Error('TUNING FAILED: Claude did not change the parent experiment');
       }
@@ -416,8 +422,5 @@ try {
   console.error(`ERROR ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`);
   process.exitCode = 1;
 } finally {
-  if (worktree) {
-    try { await run('git', ['worktree', 'remove', '--force', worktree], { cwd: playablesRoot, timeoutMs: 60000 }); } catch { /* best effort */ }
-    rmSync(worktree, { recursive: true, force: true });
-  }
+  if (worktree) rmSync(worktree, { recursive: true, force: true });
 }

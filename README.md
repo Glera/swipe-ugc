@@ -60,11 +60,12 @@ The second creation mode is deliberately dev-only. A separate persistent
 three concepts, then starts `worker/experiment.mjs` for the selected one. Every
 job names a baseline in `generator/baselines.json`; the worker resolves that
 exact commit and verifies its exact tree before creating a disposable detached
-worktree. It never uses a branch or `playables/HEAD`, and it never commits or
-pushes to `playables`. The agent can touch only `marble-sort-swipe/src/*.ts` in
-that disposable worktree and has no network access. The outer worker rejects
-forbidden paths/capabilities/dependencies, patches smaller than 20 changed
-lines, oversized payloads, build failures, and anything that cannot autoplay
+clone with its own refs and object store. It never uses a branch or
+`playables/HEAD`, and it never commits or pushes to `playables`. The agent can
+touch only `marble-sort-swipe/src/*.ts` in that disposable clone and has no
+network access. The outer worker rejects a changed clone `HEAD`, forbidden
+paths/capabilities/dependencies, patches smaller than 20 changed lines,
+oversized payloads, build failures, and anything that cannot autoplay
 all the way to WIN. It may return the gate failure for up to three repair
 attempts.
 
