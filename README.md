@@ -33,9 +33,10 @@ from the workspace root `node_modules` — the worker currently assumes it runs
 inside the workspace), then `git commit` + `push`, then notify the player via
 the Telegram bot.
 
-In dev the worker is invoked automatically by the feed dev server after every
-successful theme generation (`feed-prototype/vite.config.ts` → `islandThemeApi`)
-— a fire-and-forget background job, the player's flow never waits for it.
+In dev the worker is invoked automatically by the feed dev server only after a
+player confirms/builds the mechanic (`feed-prototype/vite.config.ts` →
+`islandThemeApi`). Preview and reroll generate theme packs only; they do not
+publish artifacts.
 
 ### Env
 
@@ -43,6 +44,7 @@ successful theme generation (`feed-prototype/vite.config.ts` → `islandThemeApi
 |---|---|
 | `UGC_FULL_WIN=1` | Test gate = full autoplay WIN (`completed` postMessage, slow). Default gate: boot (canvas/ready) + error-free grace period. |
 | `UGC_NO_PUSH=1` | Commit locally, skip `git push`. |
+| `PLAYABLES_ROOT` | Root containing `marble-sort-swipe/dist-swipe`. Defaults to sibling `../playables` in the local workspace. |
 | `BOT_TOKEN` | Telegram bot token (same var name as swipe-bot). Notification is skipped (and logged) when absent. |
 | `UGC_NOTIFY_CHAT_ID` | Chat to notify. Get yours: send `/start` to the bot, then `curl https://api.telegram.org/bot$BOT_TOKEN/getUpdates` → `message.chat.id`. |
 | `UGC_BASE_URL` | Public base URL of this repo's static site (e.g. `https://swipe-ugc.onrender.com`). Used in the notification link. |

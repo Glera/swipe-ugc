@@ -12,7 +12,7 @@
  * notified personally. UGC_NOTIFY_CHAT_ID env is only a dev-machine fallback
  * for testing outside Telegram.
  *
- * Env: UGC_FULL_WIN=1 (gate on full autoplay win), UGC_NO_PUSH=1,
+ * Env: PLAYABLES_ROOT=/path/to/playables, UGC_FULL_WIN=1 (gate on full autoplay win), UGC_NO_PUSH=1,
  *      BOT_TOKEN (+ optional UGC_NOTIFY_CHAT_ID fallback), UGC_BASE_URL (link in message).
  *
  * On success prints a machine-readable line: RESULT {"rel":"u/<user>/<id>.html"}
@@ -30,10 +30,27 @@ import { fileURLToPath } from 'url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const workspace = path.resolve(repoRoot, '..');
+const playablesRoot = process.env.PLAYABLES_ROOT
+  ? path.resolve(process.env.PLAYABLES_ROOT)
+  : path.join(workspace, 'playables');
 
 // Same recipe constants as the client fork (feed-prototype/src/island.ts).
 const SORT_MARBLES = ['#F5C842', '#5BC8D8', '#FF9F43', '#FF7B7B', '#B07BFF', '#7BE87B'];
 const BASE_BUILDS = { sort: 'marble-sort-swipe' };
+const HEX = /^#[0-9A-Fa-f]{6}$/;
+const PROPS = new Set(['mushroom', 'crystal', 'coral', 'lollipop', 'rock']);
+
+function validatePack(p) {
+  if (!p || typeof p !== 'object') return 'pack must be an object';
+  if (!Array.isArray(p.items) || p.items.length !== 6 || !p.items.every((c) => typeof c === 'string' && HEX.test(c)))
+    return 'pack.items must be exactly 6 #RRGGBB colors';
+  for (const key of ['ground', 'edge', 'boardBg', 'body', 'roof']) {
+    if (typeof p[key] !== 'string' || !HEX.test(p[key])) return `pack.${key} must be a #RRGGBB color`;
+  }
+  if (typeof p.name !== 'string' || !p.name.trim()) return 'pack.name must be a non-empty string';
+  if (typeof p.prop !== 'string' || !PROPS.has(p.prop)) return 'pack.prop is invalid';
+  return null;
+}
 
 const args = {};
 for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];
@@ -50,10 +67,11 @@ const user = (args.user ?? 'dev').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 
 if (!BASE_BUILDS[tpl]) fail(`no bake recipe for template "${tpl}" yet`);
 let pack;
 try { pack = JSON.parse(args.pack); } catch { fail('--pack must be valid JSON'); }
-if (!Array.isArray(pack.items) || pack.items.length !== 6) fail('pack.items must be 6 colors');
+const packError = validatePack(pack);
+if (packError) fail(packError);
 
 // ── 1. bake ──────────────────────────────────────────────────────────────────
-const distDir = path.join(workspace, 'playables', BASE_BUILDS[tpl], 'dist-swipe');
+const distDir = path.join(playablesRoot, BASE_BUILDS[tpl], 'dist-swipe');
 let html = readFileSync(path.join(distDir, 'index.html'), 'utf8');
 let payload = readFileSync(path.join(distDir, 'payload.js'), 'utf8');
 if (!payload.includes(SORT_MARBLES[0])) fail('stale recipe: palette constants not found in base payload');
