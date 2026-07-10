@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "baselines": {
+    "sort-v2": {
+      "template": "sort",
+      "sourceRepository": "playables",
+      "sourceCommit": "2461309119fc530619773429a02915f25760a879",
+      "sourceTree": "3f40cd6ac920c6750f96986e9ae1540ec9dede30",
+      "sourcePath": "marble-sort-swipe",
+      "artifactPath": "bases/sort-v2",
+      "releasePlayable": false
+    }
+  }
+}

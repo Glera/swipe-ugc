@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "sort-v2",
+  "purpose": "generator-base-only",
+  "sourceRepository": "playables",
+  "sourceCommit": "2461309119fc530619773429a02915f25760a879",
+  "sourceTree": "3f40cd6ac920c6750f96986e9ae1540ec9dede30",
+  "sourcePath": "marble-sort-swipe",
+  "files": {
+    "index.html": "sha256:764d79cd89161c228eeefd6dd26a700882779b1d113987ac380a8270864b808d",
+    "payload.js": "sha256:68dc2b4d60cbd0be8a714c898e031126cfe3e852ba72e188d1bf3e3da1737e08"
+  },
+  "releasePlayable": false
+}

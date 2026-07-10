@@ -2,6 +2,8 @@ export interface SortRecipe {
   version: number;
   template: 'sort';
   baseBuild: string;
+  generatorBase: string;
+  generatorBaseline: string;
   sourcePalette: string[];
   payloadScript: string;
   boardColor: string;

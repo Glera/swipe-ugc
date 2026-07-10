@@ -12,8 +12,8 @@
  * notified personally. UGC_NOTIFY_CHAT_ID env is only a dev-machine fallback
  * for testing outside Telegram.
  *
- * Env: PLAYABLES_ROOT=/path/to/playables, UGC_NO_PUSH=1,
- *      BOT_TOKEN (+ optional UGC_NOTIFY_CHAT_ID fallback), UGC_BASE_URL (link in message).
+ * Env: UGC_NO_PUSH=1, BOT_TOKEN (+ optional UGC_NOTIFY_CHAT_ID fallback),
+ *      UGC_BASE_URL (link in message).
  *
  * On success prints a machine-readable line: RESULT {"rel":"u/<user>/<id>.html"}
  *
@@ -30,12 +30,6 @@ import { recipe, validatePack } from '../recipes/sort/recipe.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
-const workspace = path.resolve(repoRoot, '..');
-const playablesRoot = process.env.PLAYABLES_ROOT
-  ? path.resolve(process.env.PLAYABLES_ROOT)
-  : path.join(workspace, 'playables');
-
-const BASE_BUILDS = { [recipe.template]: recipe.baseBuild };
 
 const args = {};
 for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];
@@ -65,18 +59,32 @@ const remoteHas = (...paths) => {
   }
 };
 
+const distDir = path.resolve(repoRoot, recipe.generatorBase || '');
+if (!recipe.generatorBase || !distDir.startsWith(repoRoot + path.sep)) fail('recipe has no safe generatorBase');
+const baseManifest = JSON.parse(readFileSync(path.join(distDir, 'manifest.json'), 'utf8'));
+if (baseManifest.purpose !== 'generator-base-only' || baseManifest.releasePlayable !== false) {
+  fail('generator base is not marked as isolated from release playables');
+}
+let html = readFileSync(path.join(distDir, 'index.html'), 'utf8');
+let payload = readFileSync(path.join(distDir, 'payload.js'), 'utf8');
+const sha256 = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`;
+if (sha256(html) !== baseManifest.files?.['index.html'] || sha256(payload) !== baseManifest.files?.['payload.js']) {
+  fail('generator base hash mismatch; refusing to bake from a mutable artifact');
+}
+if (Object.hasOwn(args, 'check-base')) {
+  log(`generator base verified: ${recipe.generatorBase} (${baseManifest.sourceTree || 'hash-locked files'})`);
+  process.exit(0);
+}
+
 const tpl = args.tpl ?? 'sort';
 const user = (args.user ?? 'dev').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'dev';
-if (!BASE_BUILDS[tpl]) fail(`no bake recipe for template "${tpl}" yet`);
+if (tpl !== recipe.template) fail(`no bake recipe for template "${tpl}" yet`);
 let pack;
 try { pack = JSON.parse(args.pack); } catch { fail('--pack must be valid JSON'); }
 const packError = validatePack(pack);
 if (packError) fail(packError);
 
 // ── 1. bake ──────────────────────────────────────────────────────────────────
-const distDir = path.join(playablesRoot, BASE_BUILDS[tpl], 'dist-swipe');
-let html = readFileSync(path.join(distDir, 'index.html'), 'utf8');
-let payload = readFileSync(path.join(distDir, 'payload.js'), 'utf8');
 const variant = {
   schemaVersion: recipe.version,
   seed: pack.seed,

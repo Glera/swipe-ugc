@@ -2,6 +2,8 @@
   "version": 2,
   "template": "sort",
   "baseBuild": "marble-sort-swipe",
+  "generatorBase": "bases/sort-v2",
+  "generatorBaseline": "sort-v2",
   "sourcePalette": [
     "#F5C842",
     "#5BC8D8",
