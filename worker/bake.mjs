@@ -6,10 +6,16 @@
  * the feed dev server after a successful theme generation (feed-prototype/
  * vite.config.ts → islandThemeApi), or manually:
  *
- *   node worker/bake.mjs --pack '<theme-pack json>' [--prompt '...'] [--user dev] [--tpl sort]
+ *   node worker/bake.mjs --pack '<theme-pack json>' [--prompt '...'] [--user dev] [--tpl sort] [--chat <telegram chat id>]
+ *
+ * --chat is the PLAYER's chat id (from the mini-app initData) — each player is
+ * notified personally. UGC_NOTIFY_CHAT_ID env is only a dev-machine fallback
+ * for testing outside Telegram.
  *
  * Env: UGC_FULL_WIN=1 (gate on full autoplay win), UGC_NO_PUSH=1,
- *      BOT_TOKEN + UGC_NOTIFY_CHAT_ID (Telegram), UGC_BASE_URL (link in message).
+ *      BOT_TOKEN (+ optional UGC_NOTIFY_CHAT_ID fallback), UGC_BASE_URL (link in message).
+ *
+ * On success prints a machine-readable line: RESULT {"rel":"u/<user>/<id>.html"}
  *
  * Exit code 0 = published (or committed with push skipped); non-zero = failed,
  * nothing committed, artifacts removed.
@@ -57,8 +63,10 @@ SORT_MARBLES.forEach((hex, i) => {
   payload = payload.split(hex).join(pack.items[i % pack.items.length]);
 });
 const hash = createHash('sha1').update(payload).digest('hex').slice(0, 8);
+// Latin-only slug: cyrillic and other scripts would end up percent-encoded in
+// URLs and can break CDNs; the display name stays as-is in the notification.
 const slug = String(args.prompt || pack.name || 'mech').toLowerCase()
-  .replace(/[^a-z0-9а-яё]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'mech';
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'mech';
 const id = `${slug}-${hash}`;
 if (!html.includes('src="./payload.js"')) fail('base html has no ./payload.js reference');
 html = html.replace('src="./payload.js"', `src="./${id}.payload.js"`);
@@ -66,7 +74,11 @@ const outDir = path.join(repoRoot, 'u', user);
 mkdirSync(outDir, { recursive: true });
 const htmlPath = path.join(outDir, `${id}.html`);
 const payloadPath = path.join(outDir, `${id}.payload.js`);
-if (existsSync(htmlPath)) { log(`already published: u/${user}/${id}.html — nothing to do`); process.exit(0); }
+if (existsSync(htmlPath)) {
+  log(`already published: u/${user}/${id}.html — nothing to do`);
+  console.log(`RESULT ${JSON.stringify({ rel: `u/${user}/${id}.html` })}`);
+  process.exit(0);
+}
 writeFileSync(htmlPath, html);
 written.push(htmlPath);
 writeFileSync(payloadPath, payload);
@@ -139,16 +151,20 @@ else { git('push'); pushed = true; log('pushed'); }
 const relUrl = `u/${user}/${id}.html`;
 const url = process.env.UGC_BASE_URL ? `${process.env.UGC_BASE_URL.replace(/\/$/, '')}/${relUrl}` : relUrl;
 const text = `🌱 Механика «${pack.name ?? slug}» готова!\n✅ Сгенерирована, протестирована автоплеем и опубликована.\n${url}`;
-if (process.env.BOT_TOKEN && process.env.UGC_NOTIFY_CHAT_ID) {
+// Per-player notification: --chat comes from the player's Telegram initData;
+// the env var is only a dev fallback for testing outside Telegram.
+const chatId = args.chat || process.env.UGC_NOTIFY_CHAT_ID;
+if (process.env.BOT_TOKEN && chatId) {
   const resp = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: process.env.UGC_NOTIFY_CHAT_ID, text }),
+    body: JSON.stringify({ chat_id: chatId, text }),
   });
   const j = await resp.json();
   if (!j.ok) console.error(`[bake] notify failed: ${JSON.stringify(j)}`);
-  else log(`notified chat ${process.env.UGC_NOTIFY_CHAT_ID}`);
+  else log(`notified chat ${chatId}`);
 } else {
-  log(`notify skipped (set BOT_TOKEN + UGC_NOTIFY_CHAT_ID); would send:\n${text.split('\n').map((l) => '  | ' + l).join('\n')}`);
+  log(`notify skipped (${process.env.BOT_TOKEN ? 'no chat id (player outside Telegram, no dev fallback)' : 'no BOT_TOKEN'}); would send:\n${text.split('\n').map((l) => '  | ' + l).join('\n')}`);
 }
+console.log(`RESULT ${JSON.stringify({ rel: relUrl })}`);
 log(`DONE ${relUrl}${pushed ? ' (pushed)' : ''}`);
