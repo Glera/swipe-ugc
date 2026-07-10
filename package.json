@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "comment": "playwright is pinned EXACTLY (no ^/~): browser binaries are baked into swipe-backend/Dockerfile.bake for this precise version, while the npm package is installed at runtime from this file. A range lets npm resolve a newer playwright that expects browser revisions absent from the image ('Executable doesn't exist at /ms-playwright/...'). Bump both places together.",
   "dependencies": {
-    "playwright": "^1.59.1"
+    "playwright": "1.59.1"
   }
 }
