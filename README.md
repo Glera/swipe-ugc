@@ -16,6 +16,7 @@ TODOs): `feed-prototype/ISLAND.md` in the workspace.
 ```
 u/<user>/<slug>-<hash8>.html          baked fork (shell)
 u/<user>/<slug>-<hash8>.payload.js    baked fork (payload with the theme applied)
+u/<user>/<slug>-<hash8>.meta.json     immutable size/cost metadata for the platform
 worker/bake.mjs                       recipe → bake → test → publish → notify
 recipes/sort/                         canonical recipe, constraints, AI prompt
 ```

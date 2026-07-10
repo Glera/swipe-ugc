@@ -56,7 +56,7 @@ const gitOk = (...a) => {
   try { git(...a); return true; } catch { return false; }
 };
 const branch = process.env.UGC_REPO_BRANCH || git('rev-parse', '--abbrev-ref', 'HEAD') || 'master';
-const emitResult = (rel) => console.log(`RESULT ${JSON.stringify({ rel })}`);
+const emitResult = (rel, meta = '') => console.log(`RESULT ${JSON.stringify({ rel, meta })}`);
 const remoteHas = (...paths) => {
   try {
     git('fetch', '--depth', '1', 'origin', branch);
@@ -96,38 +96,56 @@ const outDir = path.join(repoRoot, 'u', user);
 mkdirSync(outDir, { recursive: true });
 const htmlPath = path.join(outDir, `${id}.html`);
 const payloadPath = path.join(outDir, `${id}.payload.js`);
+const metaPath = path.join(outDir, `${id}.meta.json`);
 const relHtml = `u/${user}/${id}.html`;
 const relPayload = `u/${user}/${id}.payload.js`;
-if (existsSync(htmlPath) || existsSync(payloadPath)) {
-  if (existsSync(htmlPath) && existsSync(payloadPath)) {
+const relMeta = `u/${user}/${id}.meta.json`;
+if (existsSync(htmlPath) || existsSync(payloadPath) || existsSync(metaPath)) {
+  if (existsSync(htmlPath) && existsSync(payloadPath) && existsSync(metaPath)) {
     if (process.env.UGC_NO_PUSH === '1') {
       log(`already baked locally: ${relHtml}`);
-      emitResult(relHtml);
+      emitResult(relHtml, relMeta);
       process.exit(0);
     }
-    if (remoteHas(relHtml, relPayload)) {
+    if (remoteHas(relHtml, relPayload, relMeta)) {
       log(`already published and verified in origin/${branch}: ${relHtml}`);
-      emitResult(relHtml);
+      emitResult(relHtml, relMeta);
       process.exit(0);
     }
-    const committed = gitOk('cat-file', '-e', `HEAD:${relHtml}`) && gitOk('cat-file', '-e', `HEAD:${relPayload}`);
+    const committed = gitOk('cat-file', '-e', `HEAD:${relHtml}`)
+      && gitOk('cat-file', '-e', `HEAD:${relPayload}`)
+      && gitOk('cat-file', '-e', `HEAD:${relMeta}`);
     if (committed) {
       log(`local commit for ${relHtml} is not remote; retrying push`);
       try { git('push', 'origin', `HEAD:${branch}`); } catch (e) { abort(`retry push failed: ${e.message}`); }
-      if (!remoteHas(relHtml, relPayload)) abort(`push returned but ${relHtml} is still absent from origin/${branch}`);
+      if (!remoteHas(relHtml, relPayload, relMeta)) abort(`push returned but ${relHtml} is still absent from origin/${branch}`);
       log(`push recovered and verified: ${relHtml}`);
-      emitResult(relHtml);
+      emitResult(relHtml, relMeta);
       process.exit(0);
     }
   }
   log(`removing incomplete local artifact before rebuild: ${relHtml}`);
   rmSync(htmlPath, { force: true });
   rmSync(payloadPath, { force: true });
+  rmSync(metaPath, { force: true });
 }
 writeFileSync(htmlPath, html);
 written.push(htmlPath);
 writeFileSync(payloadPath, payload);
 written.push(payloadPath);
+writeFileSync(metaPath, JSON.stringify({
+  schemaVersion: 1,
+  artifact: relHtml,
+  template: tpl,
+  version: hash,
+  htmlBytes: Buffer.byteLength(html),
+  payloadBytes: Buffer.byteLength(payload),
+  assetBytes: 0,
+  assets: [],
+  mediaBytes: 0,
+  mountCost: 'light',
+}, null, 2) + '\n');
+written.push(metaPath);
 log(`baked u/${user}/${id} (${replaced} palette replacements, payload ${payload.length}b)`);
 
 // ── 2. test (headless autoplay) ──────────────────────────────────────────────
@@ -135,7 +153,9 @@ const FULL_WIN = process.env.UGC_FULL_WIN === '1';
 const server = createServer((req, res) => {
   const p = path.join(repoRoot, decodeURIComponent((req.url || '/').split('?')[0]));
   if (!p.startsWith(repoRoot) || !existsSync(p) || !statSync(p).isFile()) { res.statusCode = 404; res.end(); return; }
-  res.setHeader('content-type', p.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript');
+  res.setHeader('content-type', p.endsWith('.html')
+    ? 'text/html; charset=utf-8'
+    : p.endsWith('.json') ? 'application/json; charset=utf-8' : 'application/javascript');
   res.end(readFileSync(p));
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -190,7 +210,7 @@ try {
 if (process.env.UGC_NO_PUSH !== '1' && git('remote')) {
   try { git('pull', '--rebase', 'origin', branch); } catch { log('pre-commit pull failed (offline?) — continuing'); }
 }
-git('add', htmlPath, payloadPath);
+git('add', htmlPath, payloadPath, metaPath);
 git('commit', '-m', `bake: ${relHtml} — "${pack.name ?? slug}" (${tpl})\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>`);
 log(`committed ${git('rev-parse', '--short', 'HEAD')}`);
 let pushed = false;
@@ -198,7 +218,7 @@ if (process.env.UGC_NO_PUSH === '1') log('push skipped (UGC_NO_PUSH=1)');
 else if (!git('remote')) abort('no git remote configured; refusing to return an unpublished URL');
 else {
   try { git('push', 'origin', `HEAD:${branch}`); } catch (e) { abort(`push failed: ${e.message}`); }
-  if (!remoteHas(relHtml, relPayload)) abort(`push returned but ${relHtml} is absent from origin/${branch}`);
+  if (!remoteHas(relHtml, relPayload, relMeta)) abort(`push returned but ${relHtml} is absent from origin/${branch}`);
   pushed = true;
   log(`pushed and verified in origin/${branch}`);
 }
@@ -222,5 +242,5 @@ if (process.env.BOT_TOKEN && chatId) {
 } else {
   log(`notify skipped (${process.env.BOT_TOKEN ? 'no chat id (player outside Telegram, no dev fallback)' : 'no BOT_TOKEN'}); would send:\n${text.split('\n').map((l) => '  | ' + l).join('\n')}`);
 }
-emitResult(relUrl);
+emitResult(relUrl, relMeta);
 log(`DONE ${relUrl}${pushed ? ' (pushed)' : ''}`);
