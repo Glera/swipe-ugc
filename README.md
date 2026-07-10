@@ -8,6 +8,9 @@ sandboxes UGC code away from the platform's localStorage/session.
 
 Everything under `u/` is a generated artifact — do not hand-edit.
 
+Full system documentation for the island meta (concept, flows, all four repos,
+TODOs): `feed-prototype/ISLAND.md` in the workspace.
+
 ## Layout
 
 ```
@@ -54,6 +57,17 @@ publish artifacts.
 `render.yaml` describes a free static site. Connect this repo in the Render
 dashboard once; every worker push auto-deploys (~1 min). When volume outgrows
 git-as-storage, the worker's publish step swaps to S3/R2 — nothing else changes.
+
+## Privacy (planned change)
+
+This repo is **public for the prototype phase only** — acceptable because the
+static site serves the same files publicly anyway, and a public repo gives a
+free backup CDN (jsDelivr). The product decision is to eventually **hide
+generated mechanics**: players' creations are product content and should not be
+browsable/scrapable outside the platform. Target setup: a **closed CDN** —
+private bucket (S3/R2) with delivery through non-public or signed URLs and no
+listing; this repo goes private or is replaced by object storage entirely. Only
+the worker's publish step changes; bake, testing, and notification stay as-is.
 
 ## Production notes
 
