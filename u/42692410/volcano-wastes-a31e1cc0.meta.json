@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "artifact": "u/42692410/volcano-wastes-a31e1cc0.html",
+  "template": "sort",
+  "version": "a31e1cc0",
+  "htmlBytes": 1358,
+  "payloadBytes": 138859,
+  "assetBytes": 0,
+  "assets": [],
+  "mediaBytes": 0,
+  "mountCost": "light",
+  "variant": {
+    "schemaVersion": 2,
+    "seed": 251735639,
+    "items": [
+      "#D9534F",
+      "#F2E3C6",
+      "#E8A33D",
+      "#8A5A44",
+      "#6FA34B",
+      "#5B8BD8"
+    ],
+    "sceneBg": "#152218",
+    "boardBg": "#24372A",
+    "belt": "#556B50",
+    "outline": "#B6C6A8",
+    "difficulty": "easy",
+    "motion": "calm",
+    "marbleStyle": "matte",
+    "markerStyle": "dots",
+    "targetShape": "bowl",
+    "conveyorPath": "oval",
+    "sourceShape": "flask",
+    "backgroundPattern": "grid"
+  }
+}
