@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: swipe-ugc
+    runtime: static
+    buildCommand: ""
+    staticPublishPath: .
+    headers:
+      - path: /u/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
