@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "template": "sort",
   "baseBuild": "marble-sort-swipe",
   "sourcePalette": [
@@ -12,11 +12,24 @@
   ],
   "payloadScript": "./payload.js",
   "boardColor": "#4A5878",
+  "adherence": {
+    "darkTerms": ["black", "dark", "midnight", "night", "noir", "черн", "темн", "тёмн", "ноч"],
+    "darkSceneMaxLuminance": 0.12,
+    "darkBoardMaxLuminance": 0.22
+  },
   "pack": {
     "itemCount": 6,
     "hexPattern": "^#[0-9A-Fa-f]{6}$",
     "minPairwiseRgbDistance": 90,
     "props": ["mushroom", "crystal", "coral", "lollipop", "rock"],
-    "colorFields": ["ground", "edge", "boardBg", "body", "roof"]
+    "colorFields": ["ground", "edge", "sceneBg", "boardBg", "belt", "outline", "body", "roof"],
+    "difficulties": ["easy", "medium", "hard", "expert"],
+    "motions": ["calm", "heavy", "bouncy", "chaotic"],
+    "marbleStyles": ["glossy", "matte", "glass", "metal", "gem", "bubble", "ember", "obsidian"],
+    "markerStyles": ["none", "rings", "dots", "stripes", "glyphs"],
+    "targetShapes": ["capsule", "hex", "jar", "bowl", "crystal"],
+    "conveyorPaths": ["racetrack", "oval", "compact", "wave"],
+    "sourceShapes": ["bottle", "hopper", "silo", "flask"],
+    "backgroundPatterns": ["solid", "grid", "stars", "bubbles", "embers"]
   }
 }

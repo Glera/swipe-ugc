@@ -31,12 +31,12 @@ platform, for free).
 node worker/bake.mjs --pack '<theme-pack json>' --prompt 'затерянная атлантида' --user dev
 ```
 
-Pipeline: read the base build (`playables/marble-sort-swipe/dist-swipe`), apply
-the recipe (marble-palette substitution in the payload), write the fork under
-`u/<user>/`, **autoplay-test it in headless chromium** (playwright, resolved
-from the workspace root `node_modules` — the worker currently assumes it runs
-inside the workspace), then `git commit` + `push`, then notify the player via
-the Telegram bot.
+Pipeline: read the base build (`playables/marble-sort-swipe/dist-swipe`), inject
+the versioned visual/gameplay variant config, write the fork under `u/<user>/`,
+**autoplay it to WIN in headless chromium**, then `git commit` + `push`, then
+notify the player via the Telegram bot. The config controls difficulty, motion,
+scene surfaces, marble treatment, source/target shapes, conveyor path, and
+background pattern; its seed makes a published artifact reproducible.
 
 `recipes/sort/` is the source of truth for the base build, source palette, pack
 constraints, and AI theme prompt. Both the worker and feed Vite config use
@@ -54,7 +54,8 @@ publish artifacts.
 
 | Var | Meaning |
 |---|---|
-| `UGC_FULL_WIN=1` | Test gate = full autoplay WIN (`completed` postMessage, slow). Default gate: boot (canvas/ready) + error-free grace period. |
+| `UGC_TEST_TIMEOUT_SEC` | Full autoplay WIN timeout. Defaults to 180 seconds; values below 30 are clamped. |
+| `UGC_DRY_RUN=1` | Bake and run the full WIN gate, then remove generated artifacts without committing or pushing. |
 | `UGC_NO_PUSH=1` | Commit locally, skip `git push`. |
 | `PLAYABLES_ROOT` | Root containing `marble-sort-swipe/dist-swipe`. Defaults to sibling `../playables` in the local workspace. |
 | `BOT_TOKEN` | Telegram bot token (same var name as swipe-bot). Notification is skipped (and logged) when absent. |

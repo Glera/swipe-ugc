@@ -12,7 +12,7 @@
  * notified personally. UGC_NOTIFY_CHAT_ID env is only a dev-machine fallback
  * for testing outside Telegram.
  *
- * Env: PLAYABLES_ROOT=/path/to/playables, UGC_FULL_WIN=1 (gate on full autoplay win), UGC_NO_PUSH=1,
+ * Env: PLAYABLES_ROOT=/path/to/playables, UGC_NO_PUSH=1,
  *      BOT_TOKEN (+ optional UGC_NOTIFY_CHAT_ID fallback), UGC_BASE_URL (link in message).
  *
  * On success prints a machine-readable line: RESULT {"rel":"u/<user>/<id>.html"}
@@ -35,7 +35,6 @@ const playablesRoot = process.env.PLAYABLES_ROOT
   ? path.resolve(process.env.PLAYABLES_ROOT)
   : path.join(workspace, 'playables');
 
-const SORT_MARBLES = recipe.sourcePalette;
 const BASE_BUILDS = { [recipe.template]: recipe.baseBuild };
 
 const args = {};
@@ -78,19 +77,35 @@ if (packError) fail(packError);
 const distDir = path.join(playablesRoot, BASE_BUILDS[tpl], 'dist-swipe');
 let html = readFileSync(path.join(distDir, 'index.html'), 'utf8');
 let payload = readFileSync(path.join(distDir, 'payload.js'), 'utf8');
-if (!payload.includes(SORT_MARBLES[0])) fail('stale recipe: palette constants not found in base payload');
-let replaced = 0;
-SORT_MARBLES.forEach((hex, i) => {
-  replaced += payload.split(hex).length - 1;
-  payload = payload.split(hex).join(pack.items[i % pack.items.length]);
-});
-const hash = createHash('sha1').update(payload).digest('hex').slice(0, 8);
+const variant = {
+  schemaVersion: recipe.version,
+  seed: pack.seed,
+  items: pack.items,
+  sceneBg: pack.sceneBg,
+  boardBg: pack.boardBg,
+  belt: pack.belt,
+  outline: pack.outline,
+  difficulty: pack.difficulty,
+  motion: pack.motion,
+  marbleStyle: pack.marbleStyle,
+  markerStyle: pack.markerStyle,
+  targetShape: pack.targetShape,
+  conveyorPath: pack.conveyorPath,
+  sourceShape: pack.sourceShape,
+  backgroundPattern: pack.backgroundPattern,
+};
+const variantJson = JSON.stringify(variant).replace(/<\/script/gi, '<\\/script');
+const hash = createHash('sha1').update(payload).update('\0').update(variantJson).digest('hex').slice(0, 8);
 // Latin-only slug: cyrillic and other scripts would end up percent-encoded in
 // URLs and can break CDNs; the display name stays as-is in the notification.
 const slug = String(args.prompt || pack.name || 'mech').toLowerCase()
   .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'mech';
 const id = `${slug}-${hash}`;
 if (!html.includes('src="./payload.js"')) fail('base html has no ./payload.js reference');
+html = html.replace(
+  '<script type="module" src="./payload.js"></script>',
+  `<script>window.__UGC_SORT_VARIANT__=${variantJson}</script>\n  <script type="module" src="./payload.js"></script>`,
+);
 html = html.replace('src="./payload.js"', `src="./${id}.payload.js"`);
 const outDir = path.join(repoRoot, 'u', user);
 mkdirSync(outDir, { recursive: true });
@@ -144,12 +159,12 @@ writeFileSync(metaPath, JSON.stringify({
   assets: [],
   mediaBytes: 0,
   mountCost: 'light',
+  variant,
 }, null, 2) + '\n');
 written.push(metaPath);
-log(`baked u/${user}/${id} (${replaced} palette replacements, payload ${payload.length}b)`);
+log(`baked u/${user}/${id} (${pack.difficulty}/${pack.motion}, ${pack.conveyorPath}, payload ${payload.length}b)`);
 
 // ── 2. test (headless autoplay) ──────────────────────────────────────────────
-const FULL_WIN = process.env.UGC_FULL_WIN === '1';
 const server = createServer((req, res) => {
   const p = path.join(repoRoot, decodeURIComponent((req.url || '/').split('?')[0]));
   if (!p.startsWith(repoRoot) || !existsSync(p) || !statSync(p).isFile()) { res.statusCode = 404; res.end(); return; }
@@ -180,26 +195,34 @@ try {
   });
   await page.goto(`http://127.0.0.1:${port}/u/${user}/${id}.html?auto=1`, { waitUntil: 'domcontentloaded' });
 
-  const deadline = Date.now() + (FULL_WIN ? 180000 : 25000);
-  let booted = false, won = false, bootedAt = 0;
+  const testTimeoutMs = Math.max(30, Number(process.env.UGC_TEST_TIMEOUT_SEC || 180)) * 1000;
+  const deadline = Date.now() + testTimeoutMs;
+  let booted = false, won = false, lastDebug = null;
   while (Date.now() < deadline) {
     const st = await page.evaluate(() => ({
       ev: window.__events,
       canvas: !!document.querySelector('canvas'),
+      debug: typeof window.__sortDebug === 'function' ? window.__sortDebug() : null,
     }));
-    if (!booted && (st.canvas || st.ev.some((e) => /ready|loaded/i.test(e.type)))) { booted = true; bootedAt = Date.now(); }
+    lastDebug = st.debug;
+    if (!booted && (st.canvas || st.ev.some((e) => /ready|loaded/i.test(e.type)))) booted = true;
     won = st.ev.some((e) => /complet|won|win/i.test(e.type) && e.success !== false);
     if (won) break;
-    if (!FULL_WIN && booted && Date.now() - bootedAt > 8000) break;   // boot + grace period
     await new Promise((r) => setTimeout(r, 500));
   }
   if (errors.length) fail(`console/page errors during test:\n  ${errors.slice(0, 5).join('\n  ')}`);
-  if (FULL_WIN && !won) fail('autoplay did not reach a win within 180s');
+  if (!won) fail(`autoplay did not reach a win within ${Math.round(testTimeoutMs / 1000)}s; last state: ${JSON.stringify(lastDebug)}`);
   if (!booted) fail('fork did not boot (no canvas, no ready event) within 25s');
-  log(FULL_WIN ? `test passed: autoplay WIN, no errors` : `test passed: booted, ${won ? 'won during grace, ' : ''}8s error-free`);
+  log('test passed: autoplay WIN, no errors');
 } finally {
   await browser.close();
   server.close();
+}
+
+if (process.env.UGC_DRY_RUN === '1') {
+  for (const file of written) rmSync(file, { force: true });
+  log('dry run complete; generated artifacts removed');
+  process.exit(0);
 }
 
 // ── 3. publish ───────────────────────────────────────────────────────────────

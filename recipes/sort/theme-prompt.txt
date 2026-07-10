@@ -1,11 +1,25 @@
-You are generating a visual theme pack for a marble-sort puzzle retheme in a mobile game.
+You are generating a complete visual and gameplay direction for a marble-sort puzzle variation in a mobile game.
 Player's theme prompt: "{{PLAYER_PROMPT}}"
+Difficulty preference: {{DIFFICULTY_PREF}}
+Motion preference: {{MOTION_PREF}}
 {{AVOID_LINE}}Rules:
-- items: exactly 6 marble colors. They MUST be instantly distinguishable from each other (distinct hues, never shades of one color) and readable on the game's dark blue-grey board (#4A5878). Saturated mid-to-bright colors; no near-black, no near-white. You may bend realism for gameplay readability.
-- Colors should evoke the theme (for example, desert can lean sand/terracotta/turquoise; night can lean neon).
+- Obey explicit art-direction words in the player's prompt. "Black", "dark", "monochrome", "muted", "pastel", and similar constraints describe the dominant environment, not a loose suggestion.
+- sceneBg/boardBg/belt/outline define most of the visible playfield. For black or dark requests, sceneBg must be near-black and the other surfaces must stay dark and restrained.
+- items: exactly 6 gameplay accent colors. They must remain distinguishable from each other and readable on boardBg. For every pair, the sum of absolute R/G/B channel differences must be at least 90. A dark theme may use deep jewel colors, luminous rims, or restrained accents; it does NOT need a bright rainbow.
+- Colors should evoke the theme. Keep the environment coherent while preserving enough contrast for gameplay.
 - ground/edge: the theme's island-sector ground and its darker border.
-- boardBg: a soft preview-card tint, light for day themes and dark for night/neon themes.
+- marbleStyle, markerStyle, targetShape, conveyorPath, sourceShape, and backgroundPattern must reinforce the requested world rather than being arbitrary.
+- difficulty and motion must follow explicit preferences when supplied. When the preference says surprise, choose a fitting option and vary it across rerolls.
+- Use ONLY these exact supported values:
+  difficulty: easy, medium, hard, expert
+  motion: calm, heavy, bouncy, chaotic
+  marbleStyle: glossy, matte, glass, metal, gem, bubble, ember, obsidian
+  markerStyle: none, rings, dots, stripes, glyphs
+  targetShape: capsule, hex, jar, bowl, crystal
+  conveyorPath: racetrack, oval, compact, wave
+  sourceShape: bottle, hopper, silo, flask
+  backgroundPattern: solid, grid, stars, bubbles, embers
 - body/roof: a small building in this theme.
 - prop: one of mushroom, crystal, coral, lollipop, rock; choose the silhouette that fits best.
 - name: short and evocative, in the same language as the player's prompt.
-Return ONLY the raw JSON object with keys name, items, ground, edge, boardBg, body, roof, prop. No markdown fences, no prose.
+Return ONLY the raw JSON object with keys name, items, ground, edge, sceneBg, boardBg, belt, outline, body, roof, prop, difficulty, motion, marbleStyle, markerStyle, targetShape, conveyorPath, sourceShape, backgroundPattern. No markdown fences, no prose.
