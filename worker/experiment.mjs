@@ -157,6 +157,7 @@ const FORBIDDEN = [
   [/\bWebSocket\b/i, 'WebSocket'],
   [/\bEventSource\b/i, 'EventSource'],
   [/\bnavigator\.sendBeacon\b/i, 'sendBeacon'],
+  [/\bnavigator\.serviceWorker\b/i, 'service worker'],
   [/\b(?:localStorage|sessionStorage|indexedDB|document\.cookie)\b/i, 'persistent storage'],
   [/\beval\s*\(/i, 'eval'],
   [/\bnew\s+Function\b/i, 'new Function'],
@@ -469,6 +470,19 @@ async function conformance(html, attempt) {
       await page.waitForTimeout(IDLE_TEST_MS);
       const activeState = await page.evaluate(() => window.__gate);
       if (activeState.rafFrames < 10) throw new Error(`CONFORMANCE FAILED: render loop produced only ${activeState.rafFrames} frames`);
+      status('cover', 'Capturing a real gameplay frame for the candidate card', attempt);
+      const coverAspect = 16 / 9;
+      const coverHeight = Math.min(box.height, box.width / coverAspect);
+      const coverWidth = Math.min(box.width, coverHeight * coverAspect);
+      const coverPng = await page.screenshot({
+        type: 'png',
+        clip: {
+          x: box.x + (box.width - coverWidth) / 2,
+          y: box.y + (box.height - coverHeight) / 2,
+          width: coverWidth,
+          height: coverHeight,
+        },
+      });
 
       await page.evaluate(() => window.postMessage({ target: 'playable-swipe', type: 'setHostPaused', paused: true }, '*'));
       await page.waitForFunction(() => window.__playable?.isPaused?.() === true, undefined, { timeout: 5000 });
@@ -486,7 +500,7 @@ async function conformance(html, attempt) {
       if (externalAttempts.length) throw new Error(`NETWORK DENY: ${externalAttempts.slice(0, 8).join(', ')}`);
       if (state.violations.length) throw new Error(`CSP VIOLATION: ${state.violations.slice(0, 8).join(', ')}`);
       if (errors.length) throw new Error(`CONFORMANCE ERRORS\n${errors.slice(0, 8).join('\n')}`);
-      return { idleMs: IDLE_TEST_MS, rafFrames: state.rafFrames };
+      return { metrics: { idleMs: IDLE_TEST_MS, rafFrames: state.rafFrames }, coverPng };
     } finally {
       await browser.close();
     }
@@ -558,7 +572,7 @@ async function autoplayWithFlakeRetry(html, attempt, onRun) {
   }
 }
 
-async function publishLocal(patch, files, baseCommit, attempts, agentSummary, autoplayPassed, gateError, html, metrics) {
+async function publishLocal(patch, files, baseCommit, attempts, agentSummary, autoplayPassed, gateError, html, coverPng, metrics) {
   const digest = createHash('sha1').update(baseCommit).update('\0').update(patch).digest('hex').slice(0, 10);
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'wild-sort';
   const id = `${slug}-${digest}`;
@@ -566,6 +580,7 @@ async function publishLocal(patch, files, baseCommit, attempts, agentSummary, au
   mkdirSync(artifactRoot, { recursive: true });
   assertHardenedExperimentHtml(html);
   writeFileSync(path.join(artifactRoot, `${id}.html`), html);
+  writeFileSync(path.join(artifactRoot, `${id}.cover.png`), coverPng);
   writeFileSync(path.join(localRoot, `${id}.patch`), patch);
   const manifest = {
     id,
@@ -598,6 +613,8 @@ async function publishLocal(patch, files, baseCommit, attempts, agentSummary, au
     agentSummary,
     createdAt: new Date().toISOString(),
     url: `/ugc/u/local-experiments/${id}.html`,
+    coverUrl: `/ugc/u/local-experiments/${id}.cover.png`,
+    coverBytes: coverPng.length,
   };
   writeFileSync(path.join(localRoot, `${id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
@@ -631,7 +648,7 @@ try {
   status('typecheck-baseline', 'Recording pre-existing diagnostics so only new errors consume the experiment budget');
   const baselineDiagnostics = new Set((await collectTypeDiagnostics(worktree)).map(normalizeDiagnostic));
 
-  let lastFailure = '', agentSummary = '', validated = null, artifactHtml = '', wonAt = 0;
+  let lastFailure = '', agentSummary = '', validated = null, artifactHtml = '', coverPng = null, wonAt = 0;
   let autoplayPassed = true, gateError = null;
   let agentInvocations = 0, playtestRuns = 0, conformanceMetrics = null, autoplayMetrics = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -648,7 +665,9 @@ try {
       await typecheck(worktree, validated.files, baselineDiagnostics, attempt);
       await build(worktree, attempt);
       artifactHtml = selfContainedArtifact(worktree);
-      conformanceMetrics = await conformance(artifactHtml, attempt);
+      const conformanceResult = await conformance(artifactHtml, attempt);
+      conformanceMetrics = conformanceResult.metrics;
+      coverPng = conformanceResult.coverPng;
       const playtest = await autoplayWithFlakeRetry(artifactHtml, attempt, () => { playtestRuns++; });
       autoplayMetrics = playtest.result;
       wonAt = attempt;
@@ -666,7 +685,7 @@ try {
       if (attempt === MAX_ATTEMPTS) throw error;
     }
   }
-  if (!validated || !artifactHtml || !wonAt) fail('experiment exhausted its repair budget');
+  if (!validated || !artifactHtml || !coverPng || !wonAt) fail('experiment exhausted its repair budget');
   status('publish', autoplayPassed ? 'Autoplay won; saving the local experiment' : 'Saving the unverified local experiment', wonAt);
   const result = await publishLocal(
     validated.patch,
@@ -677,6 +696,7 @@ try {
     autoplayPassed,
     gateError,
     artifactHtml,
+    coverPng,
     { agentInvocations, playtestRuns, conformance: conformanceMetrics, autoplay: autoplayMetrics },
   );
   console.log(`RESULT ${JSON.stringify(result)}`);

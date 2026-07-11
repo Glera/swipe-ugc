@@ -16,6 +16,7 @@ TODOs): `feed-prototype/ISLAND.md` in the workspace.
 ```
 u/<user>/<slug>-<hash8>.html          baked fork (shell)
 u/<user>/<slug>-<hash8>.payload.js    baked fork (payload with the theme applied)
+u/<user>/<experiment-id>.cover.png    real gameplay frame for a wild candidate
 u/<user>/<slug>-<hash8>.meta.json     immutable size/cost metadata for the platform
 worker/bake.mjs                       recipe → bake → test → publish → notify
 recipes/sort/                         canonical recipe, constraints, AI prompt
@@ -41,6 +42,10 @@ the versioned visual/gameplay variant config, write the fork under `u/<user>/`,
 notify the player via the Telegram bot. The config controls difficulty, motion,
 scene surfaces, marble treatment, source/target shapes, conveyor path, and
 background pattern; its seed makes a published artifact reproducible.
+Guided HTML also receives the network-deny CSP; its versioned same-origin
+payload is allowed by `script-src 'self'`, while connect/worker/frame/navigation
+capabilities remain denied. The CSP policy version participates in the artifact
+hash, so pre-policy files are never reused as hardened results.
 
 `recipes/sort/` is the source of truth for the generator base, source palette,
 pack constraints, and AI theme prompt. The frozen base manifest records file
@@ -71,7 +76,12 @@ TypeScript diagnostics in changed files, oversized payloads, build failures,
 and runtime/security conformance failures. The self-contained artifact receives
 a network-deny CSP and Playwright aborts every non-local request. Browser checks
 cover staged readiness, pause, manual input, 30-second idle stability, fixed-seed
-autoplay, non-instant completion, visible frame changes, and rAF health.
+autoplay, non-instant completion, visible frame changes, and rAF health. The
+same checked run captures a 16:9 gameplay frame; the platform uses that PNG for
+the candidate and building preview instead of reconstructing a symbolic board.
+The current visual/rAF checks intentionally target the only wild baseline,
+Canvas sort; a DOM/WebGL baseline must register renderer-specific probes before
+it can enter the catalog.
 
 An inconclusive physics autoplay is rerun once on the exact same build before a
 new model call. A healthy/runtime-safe build whose win is still unproven may be
@@ -85,16 +95,17 @@ The lab strips Anthropic and OpenAI API variables from concept and coding
 subprocesses. It uses local CLI subscription logins and cannot silently fall
 back to API credentials inherited by either service.
 
-Successful artifacts live under ignored `u/local-experiments/`; lineage patches
+Successful HTML and cover artifacts live under ignored `u/local-experiments/`; lineage patches
 and manifests live under ignored `.local-experiments/`. Generator job state is
 persisted under `swipe-generator/.data`, so a Vite/page reload does not stop or
 lose work and the platform reconnects to unfinished jobs. Artifacts are served
-by Vite, can be tuned with another natural-language patch, and are not published
-during generation. The UI is absent from production builds. A placed experiment
-is kept in a separate local overlay store, so later island syncs cannot upload
-its URL or replace backend state.
-When `BOT_TOKEN` and a TMA chat id (or `UGC_NOTIFY_CHAT_ID`) are available, the
-detached runner notifies the player on ready/final failure even if the page is closed.
+by Vite, can be tuned through a persistent multi-message lineage thread, and are
+not published during generation. The UI is absent from production builds. A
+placed experiment is kept in a separate local overlay store, so later island
+syncs cannot upload its URL or replace backend state. When `BOT_TOKEN` and a TMA
+chat id are available, the detached runner notifies the player on ready/final
+failure even if the page is closed. `UGC_NOTIFY_CHAT_ID` is strictly a
+dev-machine fallback and must not be carried into a shared server runtime.
 
 Explicit **Publish tested artifact** runs `worker/publish-experiment.mjs`. It
 repeats sandbox autoplay, creates a detached worktree from `origin`, verifies a

@@ -34,6 +34,10 @@ const hardenedHtml = hardenExperimentHtml(baseHtml.replace(
   `<script type="module">${basePayload}</script>`,
 ));
 const cspProbeHtml = hardenExperimentHtml('<!doctype html><html><head><script>new Image().src="https://example.invalid/exfiltrate"</script></head><body></body></html>');
+const guidedCspHtml = hardenExperimentHtml(
+  '<!doctype html><html><head><script type="module" src="/test/guided-payload.js"></script></head><body></body></html>',
+  { allowSameOriginScripts: true },
+);
 
 const server = createServer((request, response) => {
   const pathname = decodeURIComponent((request.url || '/').split('?')[0]);
@@ -45,6 +49,16 @@ const server = createServer((request, response) => {
   if (pathname === '/test/csp-probe.html') {
     response.setHeader('content-type', 'text/html; charset=utf-8');
     response.end(cspProbeHtml);
+    return;
+  }
+  if (pathname === '/test/guided.html') {
+    response.setHeader('content-type', 'text/html; charset=utf-8');
+    response.end(guidedCspHtml);
+    return;
+  }
+  if (pathname === '/test/guided-payload.js') {
+    response.setHeader('content-type', 'application/javascript; charset=utf-8');
+    response.end('window.__guidedPayloadLoaded = true;');
     return;
   }
   const file = path.resolve(root, `.${pathname}`);
@@ -93,6 +107,13 @@ try {
   if (!blockedProbe.some((violation) => violation.startsWith('img-src'))) throw new Error('network-deny CSP did not report the image exfiltration probe');
   if (!externalAttempts.length) throw new Error('Playwright network deny did not observe the image exfiltration attempt');
   externalAttempts.length = 0;
+
+  errors.length = 0;
+  await page.goto(`${origin}/test/guided.html`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__guidedPayloadLoaded === true);
+  const guidedViolations = await page.evaluate(() => window.__cspViolations);
+  if (guidedViolations.length) throw new Error(`guided CSP blocked its payload: ${guidedViolations.join(', ')}`);
+  if (externalAttempts.length) throw new Error(`guided CSP test attempted external requests: ${externalAttempts.join(', ')}`);
 
   errors.length = 0;
   await page.goto(`${origin}/test/hardened.html?auto=0&hostPaused=1&warmpaint=off`, { waitUntil: 'domcontentloaded' });

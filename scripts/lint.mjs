@@ -7,6 +7,7 @@ const files = [
   'recipes/sort/recipe.mjs',
   'worker/hardening.mjs',
   'worker/bake.mjs',
+  'worker/capture-cover.mjs',
   'worker/experiment.mjs',
   'worker/publish-experiment.mjs',
   'worker/test-preview.mjs',

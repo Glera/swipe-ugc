@@ -27,6 +27,7 @@ import { createHash } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { recipe, validatePack } from '../recipes/sort/recipe.mjs';
+import { hardenExperimentHtml } from './hardening.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -103,7 +104,7 @@ const variant = {
   backgroundPattern: pack.backgroundPattern,
 };
 const variantJson = JSON.stringify(variant).replace(/<\/script/gi, '<\\/script');
-const hash = createHash('sha1').update(payload).update('\0').update(variantJson).digest('hex').slice(0, 8);
+const hash = createHash('sha1').update(payload).update('\0').update(variantJson).update('\0guided-csp-v1').digest('hex').slice(0, 8);
 // Latin-only slug: cyrillic and other scripts would end up percent-encoded in
 // URLs and can break CDNs; the display name stays as-is in the notification.
 const slug = String(args.prompt || pack.name || 'mech').toLowerCase()
@@ -115,6 +116,7 @@ html = html.replace(
   `<script>window.__UGC_SORT_VARIANT__=${variantJson}</script>\n  <script type="module" src="./payload.js"></script>`,
 );
 html = html.replace('src="./payload.js"', `src="./${id}.payload.js"`);
+html = hardenExperimentHtml(html, { allowSameOriginScripts: true });
 const outDir = path.join(repoRoot, 'u', user);
 mkdirSync(outDir, { recursive: true });
 const htmlPath = path.join(outDir, `${id}.html`);
@@ -167,6 +169,7 @@ writeFileSync(metaPath, JSON.stringify({
   assets: [],
   mediaBytes: 0,
   mountCost: 'light',
+  securityPolicy: 'network-deny-csp-v1',
   variant,
 }, null, 2) + '\n');
 written.push(metaPath);

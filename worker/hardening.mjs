@@ -1,6 +1,7 @@
-export const EXPERIMENT_CSP = [
+function experimentCsp(allowSameOriginScripts = false) {
+  return [
   "default-src 'none'",
-  "script-src 'unsafe-inline' blob:",
+  `script-src${allowSameOriginScripts ? " 'self'" : ''} 'unsafe-inline' blob:`,
   "style-src 'unsafe-inline'",
   'img-src data: blob:',
   'media-src data: blob:',
@@ -11,14 +12,19 @@ export const EXPERIMENT_CSP = [
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
-].join('; ');
+  ].join('; ');
+}
+
+export const EXPERIMENT_CSP = experimentCsp(false);
+export const GUIDED_CSP = experimentCsp(true);
 
 const CSP_MARKER = 'data-swipe-experiment-csp="1"';
 
-export function hardenExperimentHtml(html) {
+export function hardenExperimentHtml(html, options = {}) {
   if (typeof html !== 'string' || !/<head(?:\s[^>]*)?>/i.test(html)) throw new Error('experiment HTML has no head element');
   if (html.includes(CSP_MARKER)) return html;
-  const meta = `<meta ${CSP_MARKER} http-equiv="Content-Security-Policy" content="${EXPERIMENT_CSP}">`;
+  const policy = options.allowSameOriginScripts ? GUIDED_CSP : EXPERIMENT_CSP;
+  const meta = `<meta ${CSP_MARKER} http-equiv="Content-Security-Policy" content="${policy}">`;
   return html.replace(/<head(\s[^>]*)?>/i, (head) => `${head}\n  ${meta}`);
 }
 

@@ -180,7 +180,7 @@ async function waitForHosted(url, expectedHash, commit) {
         signal: controller.signal,
       });
       if (response.ok) {
-        const body = await response.text();
+        const body = Buffer.from(await response.arrayBuffer());
         const hash = createHash('sha1').update(body).digest('hex');
         if (hash === expectedHash) return true;
       }
@@ -203,26 +203,31 @@ async function notify(title, url, ready) {
 }
 
 const artifactPath = path.join(artifactRoot, `${id}.html`);
+const coverPath = path.join(artifactRoot, `${id}.cover.png`);
 const manifestPath = path.join(localRoot, `${id}.json`);
-if (!existsSync(artifactPath) || !existsSync(manifestPath)) throw new Error('local experiment artifact is unavailable');
+if (!existsSync(artifactPath) || !existsSync(coverPath) || !existsSync(manifestPath)) throw new Error('local experiment artifact or real cover is unavailable');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 if (manifest.id !== id) throw new Error('local experiment manifest id mismatch');
 const html = readFileSync(artifactPath, 'utf8');
 assertHardenedExperimentHtml(html);
 if (statSync(artifactPath).size > 1024 * 1024) throw new Error('experiment HTML exceeds the 1 MB publish limit');
+if (statSync(coverPath).size > 512 * 1024) throw new Error('experiment cover exceeds the 512 KB publish limit');
 if (/<script\b[^>]*\bsrc\s*=/i.test(html)) throw new Error('experiment is not self-contained: external script reference found');
 const htmlHash = createHash('sha1').update(html).digest('hex');
+const coverHash = createHash('sha1').update(readFileSync(coverPath)).digest('hex');
 const version = htmlHash.slice(0, 12);
 const relHtml = `u/${user}/${id}.html`;
+const relCover = `u/${user}/${id}.cover.png`;
 const relMeta = `u/${user}/${id}.meta.json`;
 const url = baseUrl ? `${baseUrl}/${relHtml}` : '';
+const coverUrl = baseUrl ? `${baseUrl}/${relCover}` : '';
 
 let worktree = '';
 try {
   await autoplay(html);
   if (dryRun) {
     status('dry-run', 'Sandbox passed; publication stopped before git commit');
-    console.log(`RESULT ${JSON.stringify({ id, rel: relHtml, meta: relMeta, url, commit: '', ready: false, dryRun: true })}`);
+    console.log(`RESULT ${JSON.stringify({ id, rel: relHtml, cover: relCover, meta: relMeta, url, coverUrl, commit: '', ready: false, dryRun: true })}`);
     process.exitCode = 0;
   } else {
     const remotes = (await git(['remote'])).trim();
@@ -231,54 +236,72 @@ try {
     await git(['fetch', '--depth', '20', 'origin', branch]);
 
     const remoteHtmlRef = `origin/${branch}:${relHtml}`;
+    const remoteCoverRef = `origin/${branch}:${relCover}`;
     const remoteMetaRef = `origin/${branch}:${relMeta}`;
     const hasRemoteHtml = await gitExists(remoteHtmlRef);
+    const hasRemoteCover = await gitExists(remoteCoverRef);
     const hasRemoteMeta = await gitExists(remoteMetaRef);
     let commit = '';
-    if (hasRemoteHtml || hasRemoteMeta) {
+    let coverBackfill = false;
+    if (hasRemoteHtml || hasRemoteCover || hasRemoteMeta) {
       if (!hasRemoteHtml || !hasRemoteMeta) throw new Error('remote experiment is incomplete; refusing to overwrite it');
       const remoteBlob = (await git(['rev-parse', remoteHtmlRef])).trim();
       const localBlob = (await git(['hash-object', artifactPath])).trim();
       if (remoteBlob !== localBlob) throw new Error('remote experiment id collision; refusing to overwrite it');
-      commit = (await git(['log', '-1', '--format=%H', `origin/${branch}`, '--', relHtml])).trim();
-      status('already-published', 'The exact artifact is already present in swipe-ugc');
-    } else {
+      if (hasRemoteCover) {
+        const remoteCoverBlob = (await git(['rev-parse', remoteCoverRef])).trim();
+        const localCoverBlob = (await git(['hash-object', coverPath])).trim();
+        if (remoteCoverBlob !== localCoverBlob) throw new Error('remote experiment cover collision; refusing to overwrite it');
+        commit = (await git(['log', '-1', '--format=%H', `origin/${branch}`, '--', relCover])).trim();
+        status('already-published', 'The exact artifact and real cover are already present in swipe-ugc');
+      } else {
+        coverBackfill = true;
+        status('cover-backfill', 'The artifact exists; adding its real gameplay cover');
+      }
+    }
+    if (!hasRemoteHtml || coverBackfill) {
       worktree = mkdtempSync(path.join(tmpdir(), 'swipe-ugc-publish-'));
       rmSync(worktree, { recursive: true, force: true });
       await git(['worktree', 'add', '--detach', worktree, `origin/${branch}`]);
       const targetHtml = path.join(worktree, relHtml);
+      const targetCover = path.join(worktree, relCover);
       const targetMeta = path.join(worktree, relMeta);
       mkdirSync(path.dirname(targetHtml), { recursive: true });
-      copyFileSync(artifactPath, targetHtml);
-      writeFileSync(targetMeta, `${JSON.stringify({
-        schemaVersion: 1,
-        kind: 'free-experiment',
-        artifact: relHtml,
-        template: 'sort',
-        experimentId: id,
-        parentId: manifest.parentId || null,
-        baseCommit: manifest.baseCommit,
-        title: manifest.title,
-        version,
-        htmlBytes: Buffer.byteLength(html),
-        payloadBytes: 0,
-        inlinePayloadBytes: Buffer.byteLength(html),
-        assetBytes: 0,
-        assets: [],
-        mediaBytes: 0,
-        mountCost: 'medium',
-        autoplayPassed: true,
-        attempts: manifest.attempts,
-      }, null, 2)}\n`);
+      copyFileSync(coverPath, targetCover);
+      if (!coverBackfill) {
+        copyFileSync(artifactPath, targetHtml);
+        writeFileSync(targetMeta, `${JSON.stringify({
+          schemaVersion: 1,
+          kind: 'free-experiment',
+          artifact: relHtml,
+          cover: relCover,
+          template: 'sort',
+          experimentId: id,
+          parentId: manifest.parentId || null,
+          baseCommit: manifest.baseCommit,
+          title: manifest.title,
+          version,
+          htmlBytes: Buffer.byteLength(html),
+          coverBytes: statSync(coverPath).size,
+          payloadBytes: 0,
+          inlinePayloadBytes: Buffer.byteLength(html),
+          assetBytes: 0,
+          assets: [],
+          mediaBytes: 0,
+          mountCost: 'medium',
+          autoplayPassed: true,
+          attempts: manifest.attempts,
+        }, null, 2)}\n`);
+      }
 
       const porcelain = (await git(['status', '--porcelain=v1', '--untracked-files=all'], { cwd: worktree }))
         .split('\n').filter(Boolean).map((line) => line.slice(3));
-      const expected = [relHtml, relMeta].sort();
+      const expected = coverBackfill ? [relCover] : [relHtml, relCover, relMeta].sort();
       if (JSON.stringify([...porcelain].sort()) !== JSON.stringify(expected)) {
         throw new Error(`publish worktree contains unexpected paths: ${porcelain.join(', ')}`);
       }
-      status('commit', 'Committing only the standalone HTML and its metadata');
-      await git(['add', '--', relHtml, relMeta], { cwd: worktree });
+      status('commit', coverBackfill ? 'Committing only the real gameplay cover' : 'Committing the standalone HTML, real cover, and metadata');
+      await git(['add', '--', ...expected], { cwd: worktree });
       await git(['commit', '-m', `publish experiment: ${relHtml}`], { cwd: worktree });
       const changed = (await git(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], { cwd: worktree }))
         .trim().split('\n').filter(Boolean).sort();
@@ -300,7 +323,9 @@ try {
         await git(['fetch', '--depth', '20', 'origin', branch]);
         const remoteBlob = (await git(['rev-parse', `origin/${branch}:${relHtml}`])).trim();
         const localBlob = (await git(['hash-object', artifactPath])).trim();
-        if (remoteBlob !== localBlob || !await gitExists(`origin/${branch}:${relMeta}`)) {
+        const remoteCoverBlob = (await git(['rev-parse', `origin/${branch}:${relCover}`])).trim();
+        const localCoverBlob = (await git(['hash-object', coverPath])).trim();
+        if (remoteBlob !== localBlob || remoteCoverBlob !== localCoverBlob || !await gitExists(`origin/${branch}:${relMeta}`)) {
           throw new Error('push returned but the exact artifact was not verified in origin');
         }
       }
@@ -308,11 +333,15 @@ try {
 
     if (commitDryRun) {
       status('commit-dry-run', 'Commit allowlist passed; temporary commit was not pushed');
-      console.log(`RESULT ${JSON.stringify({ id, rel: relHtml, meta: relMeta, url, commit, ready: false, dryRun: true })}`);
+      console.log(`RESULT ${JSON.stringify({ id, rel: relHtml, cover: relCover, meta: relMeta, url, coverUrl, commit, ready: false, dryRun: true })}`);
     } else {
-      const ready = await waitForHosted(url, htmlHash, commit);
+      const [htmlReady, coverReady] = await Promise.all([
+        waitForHosted(url, htmlHash, commit),
+        waitForHosted(coverUrl, coverHash, commit),
+      ]);
+      const ready = htmlReady && coverReady;
       await notify(String(manifest.title || id), url, ready);
-      console.log(`RESULT ${JSON.stringify({ id, rel: relHtml, meta: relMeta, url, commit, ready, dryRun: false })}`);
+      console.log(`RESULT ${JSON.stringify({ id, rel: relHtml, cover: relCover, meta: relMeta, url, coverUrl, commit, ready, dryRun: false })}`);
     }
   }
 } catch (error) {
