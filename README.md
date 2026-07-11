@@ -20,7 +20,9 @@ u/<user>/<slug>-<hash8>.meta.json     immutable size/cost metadata for the platf
 worker/bake.mjs                       recipe → bake → test → publish → notify
 recipes/sort/                         canonical recipe, constraints, AI prompt
 bases/sort-v2/                        immutable guided-generator build (never release)
+preview/sort-v2.html                  config-in-hash candidate preview shell
 generator/baselines.json              pinned source commit/tree for free experiments
+worker/hardening.mjs                  enforced CSP + Playwright network deny
 ```
 
 The content hash in the filename makes every artifact immutable: a new version
@@ -53,9 +55,9 @@ mechanic. Preview and reroll generate theme packs only; they do not publish
 artifacts. Neither guided bake nor its production runtime reads, builds, or
 mounts the release `playables` checkout.
 
-### Local free-experiment lab
+### Local creative-experiment lab
 
-The second creation mode is deliberately dev-only. A separate persistent
+The third/high-cost candidate is deliberately dev-only. A separate persistent
 `swipe-generator` service asks a local Claude Code or Codex subscription for
 three concepts, then starts `worker/experiment.mjs` for the selected one. Every
 job names a baseline in `generator/baselines.json`; the worker resolves that
@@ -64,10 +66,20 @@ clone with its own refs and object store. It never uses a branch or
 `playables/HEAD`, and it never commits or pushes to `playables`. The agent can
 touch only `marble-sort-swipe/src/*.ts` in that disposable clone and has no
 network access. The outer worker rejects a changed clone `HEAD`, forbidden
-paths/capabilities/dependencies, patches smaller than 20 changed lines,
-oversized payloads, build failures, and anything that cannot autoplay
-all the way to WIN. It may return the gate failure for up to three repair
-attempts.
+paths/capabilities/dependencies, patches smaller than 20 changed lines, new
+TypeScript diagnostics in changed files, oversized payloads, build failures,
+and runtime/security conformance failures. The self-contained artifact receives
+a network-deny CSP and Playwright aborts every non-local request. Browser checks
+cover staged readiness, pause, manual input, 30-second idle stability, fixed-seed
+autoplay, non-instant completion, visible frame changes, and rAF health.
+
+An inconclusive physics autoplay is rerun once on the exact same build before a
+new model call. A healthy/runtime-safe build whose win is still unproven may be
+shown and tuned locally with `autoplayPassed:false`; publication remains strict
+WIN-only. Up to three hard repair passes share one 24-hour job budget. A living,
+silent agent is not killed: five-minute PID/output/file-edit heartbeats remain
+visible as structured `agent`/`quiet` liveness, and only an observed process exit
+or the explicit day deadline can consume an attempt.
 
 The lab strips Anthropic and OpenAI API variables from concept and coding
 subprocesses. It uses local CLI subscription logins and cannot silently fall
@@ -81,6 +93,8 @@ by Vite, can be tuned with another natural-language patch, and are not published
 during generation. The UI is absent from production builds. A placed experiment
 is kept in a separate local overlay store, so later island syncs cannot upload
 its URL or replace backend state.
+When `BOT_TOKEN` and a TMA chat id (or `UGC_NOTIFY_CHAT_ID`) are available, the
+detached runner notifies the player on ready/final failure even if the page is closed.
 
 Explicit **Publish tested artifact** runs `worker/publish-experiment.mjs`. It
 repeats sandbox autoplay, creates a detached worktree from `origin`, verifies a
@@ -99,7 +113,12 @@ local subscription; publication does not call the Anthropic API.
 | `ISLAND_EXPERIMENT_EFFORT` | Claude Code reasoning effort for implementation. Defaults to `medium`; accepts `low/medium/high/xhigh`. |
 | `ISLAND_EXPERIMENT_CONCEPT_MODEL` | Claude Code model used by the local generator to roll three concepts. Defaults to `sonnet`. |
 | `UGC_EXPERIMENT_ATTEMPTS` | Local agent/build/autoplay attempts, clamped to 1–3. Defaults to 3. |
-| `UGC_EXPERIMENT_AGENT_TIMEOUT_SEC` | Timeout for each local Claude coding pass. Defaults to 600 seconds. |
+| `UGC_EXPERIMENT_TOTAL_TIMEOUT_SEC` | Total durable creative-job deadline. Defaults to 86400 seconds (24h). |
+| `UGC_EXPERIMENT_AGENT_TIMEOUT_SEC` | Maximum for one local coding pass, capped by remaining total budget. Defaults to 86400 seconds. |
+| `UGC_EXPERIMENT_AGENT_SILENCE_WARN_SEC` | Mark a living agent as silent after no output or `.ts` edits; never kills it. Defaults to 7200 seconds. |
+| `UGC_EXPERIMENT_HEARTBEAT_SEC` | PID/output/source heartbeat interval. Defaults to 300 seconds. |
+| `UGC_EXPERIMENT_IDLE_SEC` | Manual/conformance idle window. Defaults to 30 seconds. |
+| `UGC_EXPERIMENT_MIN_WIN_SEC` | Reject degenerate instant wins below this duration. Defaults to 3 seconds. |
 | `UGC_EXPERIMENT_TEST_TIMEOUT_SEC` | Full autoplay timeout per experimental build. Defaults to 150 seconds. |
 | `UGC_DEPLOY_WAIT_SEC` | How long experiment publish waits for Render after push. Defaults to 90 seconds. |
 | `UGC_DEPLOY_POLL_SEC` | Render poll interval. Defaults to 3 seconds. |

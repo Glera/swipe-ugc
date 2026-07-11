@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "comment": "playwright is pinned EXACTLY (no ^/~): browser binaries are baked into swipe-backend/Dockerfile.bake for this precise version, while the npm package is installed at runtime from this file. A range lets npm resolve a newer playwright that expects browser revisions absent from the image ('Executable doesn't exist at /ms-playwright/...'). Bump both places together.",
+  "scripts": {
+    "lint": "node scripts/lint.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:preview": "node worker/test-preview.mjs",
+    "verify": "npm run lint && npm test && node worker/bake.mjs --check-base && npm run test:preview"
+  },
   "dependencies": {
     "playwright": "1.59.1"
   }

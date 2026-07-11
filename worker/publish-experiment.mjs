@@ -23,6 +23,7 @@ import { createServer } from 'http';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { assertHardenedExperimentHtml, installExternalNetworkDeny } from './hardening.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -33,6 +34,8 @@ const baseUrl = String(process.env.UGC_BASE_URL || '').replace(/\/$/, '');
 const dryRun = process.env.UGC_PUBLISH_DRY_RUN === '1';
 const commitDryRun = process.env.UGC_PUBLISH_COMMIT_DRY_RUN === '1';
 const testTimeoutMs = Math.max(30, Number(process.env.UGC_EXPERIMENT_TEST_TIMEOUT_SEC || 150)) * 1000;
+const minWinMs = Math.max(2, Number(process.env.UGC_EXPERIMENT_MIN_WIN_SEC || 3)) * 1000;
+const testSeed = Number(process.env.UGC_EXPERIMENT_TEST_SEED || 0x5eed1234) >>> 0;
 const deployWaitMs = Math.max(0, Number(process.env.UGC_DEPLOY_WAIT_SEC || 90)) * 1000;
 const deployPollMs = Math.max(500, Number(process.env.UGC_DEPLOY_POLL_SEC || 3) * 1000);
 
@@ -94,7 +97,7 @@ async function autoplay(html) {
   const wrapper = `<!doctype html><html><body><script>
 window.__events=[];
 window.addEventListener('message',event=>{if(event.data&&event.data.source==='playable')window.__events.push(event.data)});
-</script><iframe sandbox="allow-scripts" src="/artifact.html?auto=1" style="border:0;width:390px;height:700px"></iframe></body></html>`;
+</script><iframe sandbox="allow-scripts" src="/artifact.html?auto=1&seed=${testSeed}" style="border:0;width:390px;height:700px"></iframe></body></html>`;
   const server = createServer((req, res) => {
     const pathname = (req.url || '/').split('?')[0];
     if (pathname === '/test.html') {
@@ -115,17 +118,31 @@ window.addEventListener('message',event=>{if(event.data&&event.data.source==='pl
   const { chromium } = await import('playwright');
   const browser = await chromium.launch();
   const errors = [];
+  const externalAttempts = [];
   let lastEvents = [];
   let runNumber = 1;
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
     page.on('pageerror', (error) => errors.push(String(error)));
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    await installExternalNetworkDeny(page, `http://127.0.0.1:${port}`, externalAttempts);
+    await page.addInitScript((seed) => {
+      let state = Number(seed) >>> 0;
+      Math.random = () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return state / 0x100000000;
+      };
+    }, testSeed);
     await page.goto(`http://127.0.0.1:${port}/test.html`, { waitUntil: 'domcontentloaded' });
+    let runStartedAt = Date.now();
     const deadline = Date.now() + testTimeoutMs;
     while (Date.now() < deadline) {
       lastEvents = await page.evaluate(() => window.__events || []);
-      if (lastEvents.some((event) => /complet|won|win/i.test(String(event?.type || '')) && event?.success !== false)) {
+      const completion = lastEvents.find((event) => /complet|won|win/i.test(String(event?.type || '')));
+      if (completion) {
+        if (completion.success !== true) throw new Error(`sandbox completed event has invalid success=${JSON.stringify(completion.success)}`);
+        if (Date.now() - runStartedAt < minWinMs) throw new Error(`sandbox won too early (${Date.now() - runStartedAt}ms)`);
+        if (externalAttempts.length) throw new Error(`sandbox attempted external network access: ${externalAttempts.slice(0, 8).join(', ')}`);
         if (errors.length) throw new Error(`sandbox emitted errors: ${errors.slice(0, 8).join('\n')}`);
         return;
       }
@@ -135,6 +152,7 @@ window.addEventListener('message',event=>{if(event.data&&event.data.source==='pl
         status('test-retry', `Autoplay lost; starting clean run ${runNumber} of 3`);
         lastEvents = [];
         await page.goto(`http://127.0.0.1:${port}/test.html?run=${runNumber}`, { waitUntil: 'domcontentloaded' });
+        runStartedAt = Date.now();
         continue;
       }
       if (lost) break;
@@ -144,6 +162,7 @@ window.addEventListener('message',event=>{if(event.data&&event.data.source==='pl
     await browser.close();
     await new Promise((resolve) => server.close(resolve));
   }
+  if (externalAttempts.length) throw new Error(`sandbox attempted external network access: ${externalAttempts.slice(0, 8).join(', ')}`);
   throw new Error(`sandbox autoplay did not win within ${Math.round(testTimeoutMs / 1000)}s; events=${JSON.stringify(lastEvents.slice(-12))}`);
 }
 
@@ -189,6 +208,7 @@ if (!existsSync(artifactPath) || !existsSync(manifestPath)) throw new Error('loc
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 if (manifest.id !== id) throw new Error('local experiment manifest id mismatch');
 const html = readFileSync(artifactPath, 'utf8');
+assertHardenedExperimentHtml(html);
 if (statSync(artifactPath).size > 1024 * 1024) throw new Error('experiment HTML exceeds the 1 MB publish limit');
 if (/<script\b[^>]*\bsrc\s*=/i.test(html)) throw new Error('experiment is not self-contained: external script reference found');
 const htmlHash = createHash('sha1').update(html).digest('hex');

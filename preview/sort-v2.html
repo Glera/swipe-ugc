@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Sorting candidate preview</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #090d12; }
+    #preview-error {
+      display: none;
+      min-height: 100%;
+      place-items: center;
+      padding: 24px;
+      color: #fff;
+      font: 600 14px/1.45 system-ui, sans-serif;
+      text-align: center;
+    }
+  </style>
+  <script>
+    (() => {
+      const allowed = {
+        difficulty: ['easy', 'medium', 'hard', 'expert'],
+        motion: ['calm', 'heavy', 'bouncy', 'chaotic'],
+        marbleStyle: ['glossy', 'matte', 'glass', 'metal', 'gem', 'bubble', 'ember', 'obsidian'],
+        markerStyle: ['none', 'rings', 'dots', 'stripes', 'glyphs'],
+        targetShape: ['capsule', 'hex', 'jar', 'bowl', 'crystal'],
+        conveyorPath: ['racetrack', 'oval', 'compact', 'wave'],
+        sourceShape: ['bottle', 'hopper', 'silo', 'flask'],
+        backgroundPattern: ['solid', 'grid', 'stars', 'bubbles', 'embers'],
+      };
+      const hex = /^#[0-9a-f]{6}$/i;
+      const fail = (message) => {
+        window.__UGC_PREVIEW_ERROR__ = message;
+        window.addEventListener('DOMContentLoaded', () => {
+          const error = document.querySelector('#preview-error');
+          if (!error) return;
+          error.style.display = 'grid';
+          error.textContent = `Preview unavailable: ${message}`;
+        });
+      };
+
+      try {
+        const token = location.hash.slice(1);
+        if (!token || token.length > 8192) throw new Error('missing or oversized variant');
+        const padded = token.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - token.length % 4) % 4);
+        const binary = atob(padded);
+        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        const variant = JSON.parse(new TextDecoder().decode(bytes));
+        if (!variant || variant.schemaVersion !== 2 || !Number.isInteger(variant.seed)) throw new Error('invalid recipe version or seed');
+        if (!Array.isArray(variant.items) || variant.items.length !== 6 || !variant.items.every((color) => hex.test(color))) {
+          throw new Error('invalid item palette');
+        }
+        for (const field of ['sceneBg', 'boardBg', 'belt', 'outline']) {
+          if (!hex.test(variant[field])) throw new Error(`invalid ${field}`);
+        }
+        for (const [field, values] of Object.entries(allowed)) {
+          if (!values.includes(variant[field])) throw new Error(`invalid ${field}`);
+        }
+        window.__UGC_SORT_VARIANT__ = variant;
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error));
+      }
+    })();
+  </script>
+  <script type="module">
+    if (!window.__UGC_PREVIEW_ERROR__) import('../bases/sort-v2/payload.js');
+  </script>
+</head>
+<body>
+  <div id="preview-error" role="alert"></div>
+</body>
+</html>
