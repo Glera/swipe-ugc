@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "free-experiment",
+  "artifact": "u/dev/your-swipe-echoes-e01a0ffbd6.html",
+  "cover": "u/dev/your-swipe-echoes-e01a0ffbd6.cover.png",
+  "template": "sort",
+  "experimentId": "your-swipe-echoes-e01a0ffbd6",
+  "parentId": "your-swipe-echoes-d66146d93e",
+  "baseCommit": "2461309119fc530619773429a02915f25760a879",
+  "title": "Your Swipe Echoes",
+  "version": "d747463645e8",
+  "htmlBytes": 154034,
+  "coverBytes": 15495,
+  "payloadBytes": 0,
+  "inlinePayloadBytes": 154034,
+  "assetBytes": 0,
+  "assets": [],
+  "mediaBytes": 0,
+  "mountCost": "medium",
+  "autoplayPassed": true,
+  "attempts": 1
+}
