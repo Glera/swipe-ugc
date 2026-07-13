@@ -1,0 +1,576 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.p4g.dev/sort/sort.level-spec.v1.schema.json",
+  "title": "Sort LevelSpec v1",
+  "description": "Canonical stored Sort level. Cross-array resource balance and specHash equality are enforced after JSON Schema validation.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "sort.level-spec.v1"
+    },
+    "specHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtimeContractDigest": {
+      "const": "bc4e272dc02eed01cc53a8deec78026c94c2eaca7e2e51d6934336cc5e87723e"
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "params": {
+      "type": "object",
+      "properties": {
+        "gridCols": {
+          "type": "integer",
+          "minimum": 6,
+          "maximum": 8
+        },
+        "gridRows": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 7
+        },
+        "colorsUsed": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 6
+        },
+        "cellColorMap": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/colorIndex"
+          },
+          "minItems": 30,
+          "maxItems": 56
+        },
+        "targetStacks": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/targetStack"
+            },
+            {
+              "$ref": "#/$defs/targetStack"
+            },
+            {
+              "$ref": "#/$defs/targetStack"
+            },
+            {
+              "$ref": "#/$defs/targetStack"
+            }
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "convSpeedMul": {
+          "type": "number",
+          "enum": [
+            0.8,
+            1,
+            1.25
+          ]
+        },
+        "modifiers": {
+          "type": "array",
+          "items": false,
+          "maxItems": 0
+        }
+      },
+      "required": [
+        "gridCols",
+        "gridRows",
+        "colorsUsed",
+        "cellColorMap",
+        "targetStacks",
+        "convSpeedMul",
+        "modifiers"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 6
+              },
+              "gridRows": {
+                "const": 5
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 30,
+                "maxItems": 30
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 6
+              },
+              "gridRows": {
+                "const": 6
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 36,
+                "maxItems": 36
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 6
+              },
+              "gridRows": {
+                "const": 7
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 42,
+                "maxItems": 42
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 7
+              },
+              "gridRows": {
+                "const": 5
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 35,
+                "maxItems": 35
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 7
+              },
+              "gridRows": {
+                "const": 6
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 42,
+                "maxItems": 42
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 7
+              },
+              "gridRows": {
+                "const": 7
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 49,
+                "maxItems": 49
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 8
+              },
+              "gridRows": {
+                "const": 5
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 40,
+                "maxItems": 40
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 8
+              },
+              "gridRows": {
+                "const": 6
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 48,
+                "maxItems": 48
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "gridCols": {
+                "const": 8
+              },
+              "gridRows": {
+                "const": 7
+              }
+            },
+            "required": [
+              "gridCols",
+              "gridRows"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cellColorMap": {
+                "type": "array",
+                "minItems": 56,
+                "maxItems": 56
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "colorsUsed": {
+                "const": 3
+              }
+            },
+            "required": [
+              "colorsUsed"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/colors3"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "colorsUsed": {
+                "const": 4
+              }
+            },
+            "required": [
+              "colorsUsed"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/colors4"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "colorsUsed": {
+                "const": 5
+              }
+            },
+            "required": [
+              "colorsUsed"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/colors5"
+          }
+        },
+        {
+          "properties": {
+            "targetStacks": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/stackLengths1to2"
+                },
+                {
+                  "$ref": "#/$defs/stackLengths2to3"
+                },
+                {
+                  "$ref": "#/$defs/stackLengths3to4"
+                },
+                {
+                  "$ref": "#/$defs/stackLengths4to5"
+                },
+                {
+                  "$ref": "#/$defs/stackLengths5to6"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "specHash",
+    "runtimeContractDigest",
+    "seed",
+    "params"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "colorIndex": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "targetStack": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/colorIndex"
+      },
+      "minItems": 1,
+      "maxItems": 6
+    },
+    "colors3": {
+      "$ref": "#/$defs/colorsUpTo2"
+    },
+    "colors4": {
+      "$ref": "#/$defs/colorsUpTo3"
+    },
+    "colors5": {
+      "$ref": "#/$defs/colorsUpTo4"
+    },
+    "colorsUpTo2": {
+      "type": "object",
+      "properties": {
+        "cellColorMap": {
+          "$ref": "#/$defs/colorArrayUpTo2"
+        },
+        "targetStacks": {
+          "$ref": "#/$defs/targetStacksUpTo2"
+        }
+      }
+    },
+    "colorsUpTo3": {
+      "type": "object",
+      "properties": {
+        "cellColorMap": {
+          "$ref": "#/$defs/colorArrayUpTo3"
+        },
+        "targetStacks": {
+          "$ref": "#/$defs/targetStacksUpTo3"
+        }
+      }
+    },
+    "colorsUpTo4": {
+      "type": "object",
+      "properties": {
+        "cellColorMap": {
+          "$ref": "#/$defs/colorArrayUpTo4"
+        },
+        "targetStacks": {
+          "$ref": "#/$defs/targetStacksUpTo4"
+        }
+      }
+    },
+    "colorArrayUpTo2": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2
+      }
+    },
+    "colorArrayUpTo3": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3
+      }
+    },
+    "colorArrayUpTo4": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4
+      }
+    },
+    "targetStacksUpTo2": {
+      "$ref": "#/$defs/targetStacksWithIndex2"
+    },
+    "targetStacksUpTo3": {
+      "$ref": "#/$defs/targetStacksWithIndex3"
+    },
+    "targetStacksUpTo4": {
+      "$ref": "#/$defs/targetStacksWithIndex4"
+    },
+    "targetStacksWithIndex2": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        }
+      }
+    },
+    "targetStacksWithIndex3": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      }
+    },
+    "targetStacksWithIndex4": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        }
+      }
+    },
+    "stackLengths1to2": {
+      "$ref": "#/$defs/stackLengths1to2Value"
+    },
+    "stackLengths2to3": {
+      "$ref": "#/$defs/stackLengths2to3Value"
+    },
+    "stackLengths3to4": {
+      "$ref": "#/$defs/stackLengths3to4Value"
+    },
+    "stackLengths4to5": {
+      "$ref": "#/$defs/stackLengths4to5Value"
+    },
+    "stackLengths5to6": {
+      "$ref": "#/$defs/stackLengths5to6Value"
+    },
+    "stackLengths1to2Value": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 2
+      }
+    },
+    "stackLengths2to3Value": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 3
+      }
+    },
+    "stackLengths3to4Value": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 4
+      }
+    },
+    "stackLengths4to5Value": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 4,
+        "maxItems": 5
+      }
+    },
+    "stackLengths5to6Value": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 5,
+        "maxItems": 6
+      }
+    }
+  }
+}

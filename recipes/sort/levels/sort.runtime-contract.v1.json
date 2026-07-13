@@ -1,0 +1,37 @@
+{
+  "contract": "sort.runtime-contract.v1",
+  "rectCapacity": 3,
+  "marblesPerCell": 9,
+  "palette": [
+    "#5BC8D8",
+    "#F5C842",
+    "#FF7B7B",
+    "#7BE87B",
+    "#B07BFF",
+    "#FF9F43"
+  ],
+  "cellColorMapOrder": "row-major-top-left",
+  "targetStacksOrder": "columns-left-to-right-top-down",
+  "rng": {
+    "algorithm": "mulberry32",
+    "substreams": [
+      "layout",
+      "gameplay",
+      "visual"
+    ],
+    "derivation": "fnv1a32(utf8(name) ++ 0x3A ++ utf8(decimal(seed)))",
+    "fnv1a32": {
+      "offset": 2166136261,
+      "prime": 16777619,
+      "note": "тот же алгоритм, что stable_reward_hash; выход uint32 = seed substream'а"
+    }
+  },
+  "ruleConstants": {
+    "convSpeedBase": -0.003,
+    "gridMax": [
+      8,
+      7
+    ],
+    "colorsMax": 6
+  }
+}

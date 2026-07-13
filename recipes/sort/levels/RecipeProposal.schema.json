@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.p4g.dev/sort/RecipeProposal.schema.json",
+  "title": "Sort RecipeProposal v1",
+  "description": "Strict model-authored input. Defaults are annotations for the trusted compiler and never apply to a stored RecipeVersion or LevelSpec.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "sort.recipe-proposal.v1"
+    },
+    "params": {
+      "type": "object",
+      "properties": {
+        "gridCols": {
+          "type": "integer",
+          "minimum": 6,
+          "maximum": 8,
+          "default": 8
+        },
+        "gridRows": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 7,
+          "default": 7
+        },
+        "colorsUsed": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 6,
+          "default": 6
+        },
+        "targetRectsTotal": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 24,
+          "default": 8
+        },
+        "convSpeedMul": {
+          "type": "number",
+          "enum": [
+            0.8,
+            1,
+            1.25
+          ],
+          "default": 1
+        },
+        "modifiers": {
+          "type": "array",
+          "items": false,
+          "maxItems": 0,
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "params"
+  ],
+  "additionalProperties": false
+}

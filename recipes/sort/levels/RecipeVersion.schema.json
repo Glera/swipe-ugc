@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.p4g.dev/sort/RecipeVersion.schema.json",
+  "title": "Sort RecipeVersion v1",
+  "description": "Immutable, fully materialized output of compileRecipeProposal. recipeDigest is sha256(JCS({schema,params})).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "sort.recipe-version.v1"
+    },
+    "recipeDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "readOnly": true
+    },
+    "params": {
+      "type": "object",
+      "properties": {
+        "gridCols": {
+          "type": "integer",
+          "minimum": 6,
+          "maximum": 8
+        },
+        "gridRows": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 7
+        },
+        "colorsUsed": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 6
+        },
+        "targetRectsTotal": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 24
+        },
+        "convSpeedMul": {
+          "type": "number",
+          "enum": [
+            0.8,
+            1,
+            1.25
+          ]
+        },
+        "modifiers": {
+          "type": "array",
+          "items": false,
+          "maxItems": 0
+        }
+      },
+      "required": [
+        "gridCols",
+        "gridRows",
+        "colorsUsed",
+        "targetRectsTotal",
+        "convSpeedMul",
+        "modifiers"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "recipeDigest",
+    "params"
+  ],
+  "additionalProperties": false
+}
