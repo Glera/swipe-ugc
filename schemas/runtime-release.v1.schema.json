@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "runtime-release.v1.schema.json",
+  "title": "Content-addressed runtime release descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "releasePlayable",
+    "mechanic",
+    "variant",
+    "playableId",
+    "sourceRepository",
+    "sourceCommit",
+    "sourceTree",
+    "sourcePath",
+    "qaBaselineId",
+    "qaManifestDigest",
+    "runtimeContractDigest",
+    "runtimeArtifactDigest",
+    "indexPath",
+    "sidecarPath",
+    "capabilities"
+  ],
+  "properties": {
+    "schema": { "const": "runtime-release.v1" },
+    "releasePlayable": { "const": true },
+    "mechanic": { "$ref": "#/$defs/id" },
+    "variant": { "$ref": "#/$defs/id" },
+    "playableId": { "$ref": "#/$defs/id" },
+    "sourceRepository": { "$ref": "#/$defs/id" },
+    "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sourceTree": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sourcePath": { "$ref": "#/$defs/relativePath" },
+    "qaBaselineId": { "$ref": "#/$defs/id" },
+    "qaManifestDigest": { "$ref": "#/$defs/prefixedDigest" },
+    "runtimeContractDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "runtimeArtifactDigest": { "$ref": "#/$defs/prefixedDigest" },
+    "indexPath": { "$ref": "#/$defs/relativePath" },
+    "sidecarPath": { "$ref": "#/$defs/relativePath" },
+    "capabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$" },
+      "additionalProperties": { "type": "boolean" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))[A-Za-z0-9._/-]+$"
+    },
+    "prefixedDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}
