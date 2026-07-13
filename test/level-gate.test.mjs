@@ -184,6 +184,8 @@ test('level-gate CLI verifies the pinned artifact, repeats vclock, and passes re
   );
   assert.equal(result.realtimeSmoke.terminal, 'win');
   assert.equal(result.realtimeSmoke.timedOut, false);
+  assert.deepEqual(result.vclockRuns.map((item) => item.oracleVersion), ['sort.oracle.v1', 'sort.oracle.v1']);
+  assert.equal(result.realtimeSmoke.oracleVersion, 'sort.oracle.v1');
   assert.deepEqual(result.vclockRuns.map((item) => item.epoch), [1, 1]);
   assert.deepEqual(result.vclockRuns.map((item) => item.actionTrace.map((step) => step.action.cellId)), [
     [48, 50, 40, 49, 51, 41],

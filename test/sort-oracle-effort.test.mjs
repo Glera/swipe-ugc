@@ -157,8 +157,12 @@ test('three maximum 56-action evidence summaries fit one 128 KiB RESULT line', (
     fingerprint: trace.at(-1).fingerprint,
     actionTrace: trace,
   });
-  const vclock = { ...maximal, mountMs: 15000, visualStates: 2 };
-  const realtime = { ...maximal, mountMs: 15000, timedOut: false };
+  const vclock = {
+    ...maximal, oracleVersion: 'sort.oracle.v1', mountMs: 15000, visualStates: 2,
+  };
+  const realtime = {
+    ...maximal, oracleVersion: 'sort.oracle.v1', mountMs: 15000, timedOut: false,
+  };
   const resultLine = `RESULT ${JSON.stringify({
     schema: 'sort.level-gate-result.v1',
     childId: 'a'.repeat(64),

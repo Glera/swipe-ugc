@@ -55,9 +55,10 @@ digest on stdout so server-side snapshot resolution can fail closed.
 
 ## Oracle-effort scorer
 
-`worker/level-gate.mjs` exposes the full `epoch` and `actionTrace` for both
-logical-clock runs and the realtime smoke. `worker/sort-oracle-effort.mjs`
-validates each SHA-256/JCS fingerprint chain and freezes the integer index
+`worker/level-gate.mjs` exposes the actually observed `oracleVersion`, full
+`epoch`, and `actionTrace` for both logical-clock runs and the realtime smoke.
+`worker/sort-oracle-effort.mjs` validates each SHA-256/JCS fingerprint chain
+and freezes the integer index
 
 ```text
 ticks + 60*actions + decisionPoints + recoveryTicks

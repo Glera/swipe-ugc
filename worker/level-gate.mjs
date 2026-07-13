@@ -600,11 +600,22 @@ export async function evaluateSortLevel(rawRequest, {
           visualStates: Math.min(first.visualStates, second.visualStates),
         },
         vclockRuns: [
-          { ...first.summary, mountMs: first.mountMs, visualStates: first.visualStates },
-          { ...second.summary, mountMs: second.mountMs, visualStates: second.visualStates },
+          {
+            ...first.summary,
+            oracleVersion: first.oracleVersion,
+            mountMs: first.mountMs,
+            visualStates: first.visualStates,
+          },
+          {
+            ...second.summary,
+            oracleVersion: second.oracleVersion,
+            mountMs: second.mountMs,
+            visualStates: second.visualStates,
+          },
         ],
         realtimeSmoke: realtime ? {
           ...realtime.summary,
+          oracleVersion: realtime.oracleVersion,
           mountMs: realtime.mountMs,
           timedOut: realtime.timedOut,
         } : null,
