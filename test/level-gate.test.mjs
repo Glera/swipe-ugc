@@ -9,11 +9,13 @@ import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_ORACLE_VERSION,
   LEVEL_GATE_BASELINE_ID,
+  LEVEL_GATE_GOLDEN_RESULT_SCHEMA,
   LEVEL_GATE_ORACLE_VERSION_DIGEST,
   LEVEL_GATE_REQUEST_SCHEMA,
   LEVEL_GATE_RESULT_SCHEMA,
   LEVEL_GATE_STDIN_LIMIT,
   classifyLevelRuns,
+  resolveGoldenLevelGate,
 } from '../worker/level-gate.mjs';
 import {
   SORT_ORACLE_EFFORT_SCHEMA,
@@ -121,6 +123,21 @@ test('--identity emits only the frozen QA execution identity without stdin', () 
   }
 });
 
+test('--golden resolves only the canonical recipe, LevelSpec, and artifact pin', () => {
+  const golden = resolveGoldenLevelGate(137);
+  assert.equal(golden.fixture, 'baseline-medium-seed-137');
+  assert.equal(golden.recipeDigest, fixture.recipe.version.recipeDigest);
+  assert.deepEqual(golden.request.spec, fixture.levelSpecs[0].spec);
+  assert.equal(golden.request.baseline.id, LEVEL_GATE_BASELINE_ID);
+  assert.match(golden.request.baseline.manifestSha256, /^sha256:[0-9a-f]{64}$/);
+  assert.match(golden.request.baseline.runtimeArtifactDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.match(golden.request.baseline.runtimeContractDigest, /^[0-9a-f]{64}$/);
+  assert.doesNotMatch(golden.request.baseline.runtimeContractDigest, /^sha256:/);
+  assert.equal(golden.request.spec.runtimeContractDigest, golden.request.baseline.runtimeContractDigest);
+  assert.throws(() => resolveGoldenLevelGate(138), /canonical golden LevelSpec.*unavailable/i);
+  assert.throws(() => resolveGoldenLevelGate(-1), /unsigned 32-bit integer/i);
+});
+
 test('gate rejects a baseline pin outside the canonical Sort runtime contract before browser work', () => {
   const request = gateRequest();
   request.baseline.runtimeContractDigest = '0'.repeat(64);
@@ -203,4 +220,50 @@ test('level-gate CLI verifies the pinned artifact, repeats vclock, and passes re
   assert.equal(result.environment.specHash, result.specHash);
   assert.equal(result.environment.oracleVersion, LEVEL_GATE_ORACLE_VERSION_DIGEST);
   assert.match(result.environment.platform, /^[a-z0-9._-]+$/i);
+});
+
+test('--golden 137 runs the trusted gate and emits one compact reproducible JSON line', { timeout: 120000 }, () => {
+  const run = spawnSync(process.execPath, [gate, '--golden', '137'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 110000,
+    maxBuffer: 256 * 1024,
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.equal(run.stderr, '');
+  assert.equal(run.stdout.trim().split(/\r?\n/).length, 1);
+  assert.ok(Buffer.byteLength(run.stdout) < 4096, 'golden DX output must remain compact');
+  const result = JSON.parse(run.stdout);
+  assert.deepEqual(Object.keys(result).sort(), [
+    'difficulty', 'fixture', 'metrics', 'oracle', 'reason', 'recipeDigest', 'runtimeArtifactDigest',
+    'runtimeContractDigest', 'schema', 'seed', 'specHash', 'verdict',
+  ]);
+  assert.equal(result.schema, LEVEL_GATE_GOLDEN_RESULT_SCHEMA);
+  assert.equal(result.fixture, 'baseline-medium-seed-137');
+  assert.equal(result.seed, 137);
+  assert.equal(result.recipeDigest, fixture.recipe.version.recipeDigest);
+  assert.equal(result.specHash, fixture.levelSpecs[0].spec.specHash);
+  assert.match(result.runtimeArtifactDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.match(result.runtimeContractDigest, /^[0-9a-f]{64}$/);
+  assert.equal(result.verdict, 'pass');
+  assert.equal(result.reason, 'verified');
+  assert.equal(result.difficulty.score, 2188);
+  assert.deepEqual(result.metrics, {
+    ticks: 1183,
+    actions: 6,
+    decisionPoints: 130,
+    recoveryTicks: 515,
+    visualStates: 2,
+  });
+  assert.deepEqual(result.oracle, {
+    version: 'sort.oracle.v1',
+    vclockRuns: 2,
+    vclockIdentical: true,
+    terminal: 'win',
+    boardHash: '9649087ad280abb3b29a9077d118bbbddc97eeec76ee29e9ac4a5ff9d627bbf9',
+    fingerprint: '8e69981b7882116f12103fdfd49bfacbaac4420c34fc1ad24fccb0a2c45f7b9c',
+    realtimeTerminal: 'win',
+    realtimeTimedOut: false,
+  });
+  assert.equal(Object.hasOwn(result.metrics, 'mountMs'), false);
 });

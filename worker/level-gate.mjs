@@ -12,9 +12,11 @@ import { chromium } from 'playwright';
 
 import {
   canonicalize,
+  compileRecipeProposal,
   runtimeContractDigest,
   sha256Jcs,
   validateLevelSpec,
+  validateRecipeVersion,
 } from '../recipes/sort/levels/index.mjs';
 import {
   GUIDED_CSP,
@@ -36,6 +38,7 @@ const require = createRequire(import.meta.url);
 
 export const LEVEL_GATE_REQUEST_SCHEMA = 'sort.level-gate-request.v1';
 export const LEVEL_GATE_RESULT_SCHEMA = 'sort.level-gate-result.v1';
+export const LEVEL_GATE_GOLDEN_RESULT_SCHEMA = 'sort.level-gate-golden-result.v1';
 export const LEVEL_GATE_BASELINE_ID = 'sort-v2-levels-qa';
 export const EXPECTED_ORACLE_VERSION = 'sort.oracle.v1';
 export const LEVEL_GATE_STDIN_LIMIT = 256 * 1024;
@@ -73,6 +76,8 @@ const BASELINE_CAPABILITIES = Object.freeze([
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const GIT_OBJECT = /^[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const GOLDEN_FIXTURE_FILE = path.join(repoRoot, 'recipes', 'sort', 'levels', 'fixtures', 'sort-contract-golden.v1.json');
+const BASELINE_CATALOG_FILE = path.join(repoRoot, 'generator', 'baselines.json');
 
 function exactKeys(value, expected, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -90,6 +95,89 @@ function boundedString(value, label, max) {
 
 function sha256Bytes(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function parseJsonFile(file, label) {
+  try { return JSON.parse(readFileSync(file, 'utf8')); }
+  catch (error) { throw new Error(`${label} is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+function assertGoldenRecipeMatchesSpec(recipe, spec) {
+  const params = spec.params;
+  if (params.gridCols !== recipe.params.gridCols
+    || params.gridRows !== recipe.params.gridRows
+    || params.colorsUsed !== recipe.params.colorsUsed
+    || params.convSpeedMul !== recipe.params.convSpeedMul
+    || canonicalize(params.modifiers) !== canonicalize(recipe.params.modifiers)
+    || params.targetStacks.flat().length !== recipe.params.targetRectsTotal) {
+    throw new Error('canonical golden LevelSpec differs from its RecipeVersion');
+  }
+}
+
+export function resolveGoldenLevelGate(seed) {
+  if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) {
+    throw new Error('golden seed must be an unsigned 32-bit integer');
+  }
+  const fixture = parseJsonFile(GOLDEN_FIXTURE_FILE, 'canonical Sort golden fixture');
+  if (fixture?.schema !== 'sort.contract-golden.v1'
+    || fixture.runtimeContract?.sha256 !== runtimeContractDigest
+    || !Array.isArray(fixture.levelSpecs)) {
+    throw new Error('canonical Sort golden fixture does not match the runtime contract');
+  }
+  const recipe = fixture.recipe?.version;
+  const checkedRecipe = validateRecipeVersion(recipe);
+  if (!checkedRecipe.ok) throw new Error('canonical Sort golden RecipeVersion is invalid');
+  const compiled = compileRecipeProposal(fixture.recipe?.proposal);
+  if (canonicalize(compiled) !== canonicalize(recipe)) {
+    throw new Error('canonical Sort golden recipe proposal and version disagree');
+  }
+  const matches = fixture.levelSpecs.filter((entry) => entry?.spec?.seed === seed);
+  if (matches.length !== 1) throw new Error(`canonical golden LevelSpec for seed ${seed} is unavailable or ambiguous`);
+  const selected = matches[0];
+  const checkedSpec = validateLevelSpec(selected.spec);
+  if (!checkedSpec.ok) throw new Error('canonical golden LevelSpec is invalid');
+  assertGoldenRecipeMatchesSpec(recipe, selected.spec);
+
+  const catalog = parseJsonFile(BASELINE_CATALOG_FILE, 'canonical QA baseline catalog');
+  const descriptor = catalog?.schemaVersion === 1 ? catalog.baselines?.[LEVEL_GATE_BASELINE_ID] : null;
+  if (!descriptor || descriptor.artifactPath !== `bases/${LEVEL_GATE_BASELINE_ID}`
+    || descriptor.runtimeContractDigest !== runtimeContractDigest
+    || !isSha256Digest(descriptor.runtimeArtifactDigest)
+    || !GIT_OBJECT.test(String(descriptor.sourceCommit || ''))
+    || !GIT_OBJECT.test(String(descriptor.sourceTree || ''))
+    || descriptor.releasePlayable !== false) {
+    throw new Error('canonical QA baseline descriptor is invalid');
+  }
+  const manifestFile = path.join(repoRoot, descriptor.artifactPath, 'manifest.json');
+  const manifestBytes = readFileSync(manifestFile);
+  const manifest = JSON.parse(manifestBytes.toString('utf8'));
+  if (manifest?.id !== LEVEL_GATE_BASELINE_ID
+    || manifest.sourceCommit !== descriptor.sourceCommit
+    || manifest.sourceTree !== descriptor.sourceTree
+    || manifest.runtimeArtifactDigest !== descriptor.runtimeArtifactDigest
+    || manifest.runtimeContractDigest !== descriptor.runtimeContractDigest
+    || manifest.releasePlayable !== false) {
+    throw new Error('canonical QA baseline descriptor and manifest disagree');
+  }
+  const request = normalizeRequest({
+    schema: LEVEL_GATE_REQUEST_SCHEMA,
+    childId: `golden:${seed}:${selected.spec.specHash}`,
+    leaseToken: `00000000-0000-4000-8000-${seed.toString(16).padStart(12, '0')}`,
+    baseline: {
+      id: LEVEL_GATE_BASELINE_ID,
+      manifestSha256: `sha256:${sha256Bytes(manifestBytes)}`,
+      runtimeArtifactDigest: descriptor.runtimeArtifactDigest,
+      runtimeContractDigest: descriptor.runtimeContractDigest,
+      sourceCommit: descriptor.sourceCommit,
+      sourceTree: descriptor.sourceTree,
+    },
+    spec: selected.spec,
+  });
+  return Object.freeze({
+    fixture: boundedString(selected.name, 'golden fixture name', 100),
+    recipeDigest: recipe.recipeDigest,
+    request,
+  });
 }
 
 function summary(report) {
@@ -552,6 +640,64 @@ function environmentIdentity(identity, request) {
   });
 }
 
+function deterministicGoldenRun(run) {
+  return {
+    schema: run?.schema,
+    specHash: run?.specHash,
+    epoch: run?.epoch,
+    ticks: run?.ticks,
+    boardHash: run?.boardHash,
+    fingerprint: run?.fingerprint,
+    actions: run?.actions,
+    decisionPoints: run?.decisionPoints,
+    recoveryTicks: run?.recoveryTicks,
+    terminal: run?.terminal,
+    actionTrace: run?.actionTrace,
+    oracleVersion: run?.oracleVersion,
+    visualStates: run?.visualStates,
+  };
+}
+
+export function summarizeGoldenLevelGate(golden, result) {
+  if (!golden?.request || result?.schema !== LEVEL_GATE_RESULT_SCHEMA
+    || result.specHash !== golden.request.spec.specHash
+    || result.baseline?.runtimeArtifactDigest !== golden.request.baseline.runtimeArtifactDigest
+    || !Array.isArray(result.vclockRuns) || result.vclockRuns.length !== 2) {
+    throw new Error('trusted gate returned an invalid golden result');
+  }
+  const first = deterministicGoldenRun(result.vclockRuns[0]);
+  const second = deterministicGoldenRun(result.vclockRuns[1]);
+  return {
+    schema: LEVEL_GATE_GOLDEN_RESULT_SCHEMA,
+    fixture: golden.fixture,
+    seed: golden.request.spec.seed,
+    recipeDigest: golden.recipeDigest,
+    specHash: golden.request.spec.specHash,
+    runtimeContractDigest: golden.request.baseline.runtimeContractDigest,
+    runtimeArtifactDigest: golden.request.baseline.runtimeArtifactDigest,
+    verdict: result.verdict,
+    reason: result.reason,
+    difficulty: structuredClone(result.difficulty),
+    metrics: {
+      ticks: result.metrics.ticks,
+      actions: result.metrics.actions,
+      decisionPoints: result.metrics.decisionPoints,
+      recoveryTicks: result.metrics.recoveryTicks,
+      visualStates: result.metrics.visualStates,
+    },
+    oracle: {
+      version: result.vclockRuns[0].oracleVersion,
+      vclockRuns: 2,
+      vclockIdentical: canonicalize(first) === canonicalize(second),
+      terminal: result.vclockRuns[0].terminal,
+      boardHash: result.vclockRuns[0].boardHash,
+      fingerprint: result.vclockRuns[0].fingerprint,
+      realtimeTerminal: result.realtimeSmoke?.terminal || null,
+      realtimeTimedOut: result.realtimeSmoke?.timedOut ?? null,
+    },
+  };
+}
+
 export async function evaluateSortLevel(rawRequest, {
   basesRoot = process.env.SWIPE_LEVEL_GATE_BASES_ROOT || path.join(repoRoot, 'bases'),
   onStatus = () => {},
@@ -648,7 +794,8 @@ function cleanError(error) {
 const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invoked) {
   try {
-    if (process.argv.length === 3 && process.argv[2] === '--identity') {
+    const args = process.argv.slice(2);
+    if (args.length === 1 && args[0] === '--identity') {
       const identity = await resolveGateIdentity();
       console.log(JSON.stringify({
         schema: 'sort.qa-execution.v1',
@@ -659,12 +806,22 @@ if (invoked) {
         policyDigest: identity.policyDigest,
       }));
       process.exitCode = 0;
-    } else {
+    } else if (args.length === 2 && args[0] === '--golden') {
+      if (!/^(0|[1-9][0-9]{0,9})$/.test(args[1])) throw new Error('golden seed must be an unsigned 32-bit integer');
+      const seed = Number(args[1]);
+      const golden = resolveGoldenLevelGate(seed);
+      const result = await evaluateSortLevel(golden.request, { basesRoot: path.join(repoRoot, 'bases') });
+      const compactResult = summarizeGoldenLevelGate(golden, result);
+      console.log(JSON.stringify(compactResult));
+      process.exitCode = result.verdict === 'pass' ? 0 : 2;
+    } else if (args.length === 0) {
       const request = await readBoundedStdin();
       const result = await evaluateSortLevel(request, {
         onStatus(event) { console.log(`STATUS ${JSON.stringify(event)}`); },
       });
       console.log(`RESULT ${JSON.stringify(result)}`);
+    } else {
+      throw new Error('usage: level-gate.mjs [--identity | --golden <seed>]');
     }
   } catch (error) {
     console.error(`ERROR ${JSON.stringify({ error: cleanError(error), incidentId: randomUUID() })}`);
