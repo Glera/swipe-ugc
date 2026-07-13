@@ -25,6 +25,10 @@ import {
   sha256File,
   verifyRuntimeArtifact,
 } from './runtime-artifact.mjs';
+import {
+  scoreSortOracleEffort,
+  validateSortOracleReport,
+} from './sort-oracle-effort.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -92,6 +96,7 @@ function summary(report) {
   return {
     schema: report.schema,
     specHash: report.specHash,
+    epoch: report.epoch,
     ticks: report.ticks,
     boardHash: report.boardHash,
     fingerprint: report.fingerprint,
@@ -99,6 +104,7 @@ function summary(report) {
     decisionPoints: report.decisionPoints,
     recoveryTicks: report.recoveryTicks,
     terminal: report.terminal,
+    actionTrace: report.actionTrace,
   };
 }
 
@@ -113,6 +119,7 @@ function assertReport(report, specHash) {
     throw new Error('logical QA report has invalid hashes');
   }
   if (!['running', 'win', 'loss'].includes(report.terminal)) throw new Error('logical QA report has invalid terminal state');
+  validateSortOracleReport(report, 'logical QA report');
   return report;
 }
 
@@ -219,6 +226,7 @@ function gateSourceVersion() {
     'worker/hardening.mjs',
     'worker/level-gate.mjs',
     'worker/runtime-artifact.mjs',
+    'worker/sort-oracle-effort.mjs',
   ].sort();
   const hash = createHash('sha256');
   hash.update(Buffer.from('swipe.sort-level-gate.source.v1\0'));
@@ -567,6 +575,12 @@ export async function evaluateSortLevel(rawRequest, {
         realtime = await runRealtimeSmoke(browser, origin, request.spec.specHash);
         classification = classifyLevelRuns(first, second, realtime);
       }
+      const difficulty = scoreSortOracleEffort({
+        firstReport: first.report,
+        secondReport: second.report,
+        firstOracleVersion: first.oracleVersion,
+        secondOracleVersion: second.oracleVersion,
+      });
       return {
         schema: LEVEL_GATE_RESULT_SCHEMA,
         childId: request.childId,
@@ -576,6 +590,7 @@ export async function evaluateSortLevel(rawRequest, {
         environment,
         verdict: classification.verdict,
         reason: classification.reason,
+        difficulty,
         metrics: {
           ticks: first.report.ticks,
           actions: first.report.actions,

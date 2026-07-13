@@ -52,3 +52,35 @@ The builder fixes commit, subtree, package-lock digest, installed toolchain,
 build environment, and UTC build stamp before running the committed Vite and
 post-build transforms. The final command emits only the verified `sha256:…`
 digest on stdout so server-side snapshot resolution can fail closed.
+
+## Oracle-effort scorer
+
+`worker/level-gate.mjs` exposes the full `epoch` and `actionTrace` for both
+logical-clock runs and the realtime smoke. `worker/sort-oracle-effort.mjs`
+validates each SHA-256/JCS fingerprint chain and freezes the integer index
+
+```text
+ticks + 60*actions + decisionPoints + recoveryTicks
+```
+
+in `sort.oracle-effort-tick.v1` units. `difficultyTarget`, mount time, visual
+states, and realtime timing never enter this arithmetic. The gate result has an
+exact `difficulty` object with three evidence states:
+
+- `observed`: matching oracle versions, byte-identical vclock reports, terminal
+  WIN; `score` is the completed oracle-effort observation;
+- `censored`: the same agreement but a running/loss terminal; `score` is only
+  the effort observed up to that censoring point;
+- `unavailable`: oracle-version or vclock-report mismatch; `score` is `null` and
+  must never be replaced by one run's value.
+
+The exact wire keys are `schema,status,score,unit,version,reason`. V1 reasons
+are `oracle_win`, `oracle_running`, `oracle_loss`,
+`oracle_version_mismatch`, and `vclock_report_mismatch`; version mismatch takes
+precedence over report mismatch. The frozen scorer version is
+`sha256:21e999a5176787bb5f1ab831d355979aff9a3781a136e98d13f754cfab5c637e`.
+
+This is an operational ordering signal, not a player-perceived difficulty
+label. V1 deliberately emits no easy/medium/hard band; player telemetry and a
+separately versioned calibration can add such labels later without rewriting
+the immutable QA evidence.

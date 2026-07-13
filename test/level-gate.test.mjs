@@ -15,6 +15,11 @@ import {
   LEVEL_GATE_STDIN_LIMIT,
   classifyLevelRuns,
 } from '../worker/level-gate.mjs';
+import {
+  SORT_ORACLE_EFFORT_SCHEMA,
+  SORT_ORACLE_EFFORT_UNIT,
+  SORT_ORACLE_EFFORT_VERSION,
+} from '../worker/sort-oracle-effort.mjs';
 import { sha256Jcs } from '../recipes/sort/levels/index.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -149,6 +154,17 @@ test('level-gate CLI verifies the pinned artifact, repeats vclock, and passes re
   assert.equal(result.schema, LEVEL_GATE_RESULT_SCHEMA);
   assert.equal(result.verdict, 'pass');
   assert.equal(result.reason, 'verified');
+  assert.deepEqual(result.difficulty, {
+    schema: SORT_ORACLE_EFFORT_SCHEMA,
+    status: 'observed',
+    score: 2188,
+    unit: SORT_ORACLE_EFFORT_UNIT,
+    version: SORT_ORACLE_EFFORT_VERSION,
+    reason: 'oracle_win',
+  });
+  assert.deepEqual(Object.keys(result.difficulty).sort(), [
+    'reason', 'schema', 'score', 'status', 'unit', 'version',
+  ]);
   assert.equal(result.specHash, fixture.levelSpecs[0].spec.specHash);
   assert.equal(result.baseline.runtimeArtifactDigest, baseline.runtimeArtifactDigest);
   assert.equal(result.vclockRuns.length, 2);
@@ -161,13 +177,20 @@ test('level-gate CLI verifies the pinned artifact, repeats vclock, and passes re
     })),
     [0, 1].map(() => ({
       ticks: 1183,
-      boardHash: result.vclockRuns[0].boardHash,
-      fingerprint: result.vclockRuns[0].fingerprint,
+      boardHash: '9649087ad280abb3b29a9077d118bbbddc97eeec76ee29e9ac4a5ff9d627bbf9',
+      fingerprint: '8e69981b7882116f12103fdfd49bfacbaac4420c34fc1ad24fccb0a2c45f7b9c',
       terminal: 'win',
     })),
   );
   assert.equal(result.realtimeSmoke.terminal, 'win');
   assert.equal(result.realtimeSmoke.timedOut, false);
+  assert.deepEqual(result.vclockRuns.map((item) => item.epoch), [1, 1]);
+  assert.deepEqual(result.vclockRuns.map((item) => item.actionTrace.map((step) => step.action.cellId)), [
+    [48, 50, 40, 49, 51, 41],
+    [48, 50, 40, 49, 51, 41],
+  ]);
+  assert.deepEqual(result.realtimeSmoke.actionTrace.map((step) => step.action.cellId), [48, 50, 40, 49, 51, 41]);
+  assert.ok(Buffer.byteLength(run.stdout) < 128 * 1024, 'actual golden gate stdout stays below the executor line cap');
 
   const environmentWithoutCacheKey = { ...result.environment };
   delete environmentWithoutCacheKey.cacheKey;
