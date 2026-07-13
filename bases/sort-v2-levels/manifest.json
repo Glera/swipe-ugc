@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "sort-v2-levels",
+  "purpose": "level-spec-generator-and-qa-base-only",
+  "sourceRepository": "playables",
+  "sourceCommit": "8868888384abb1d0268fd158c083207c485ac4a0",
+  "sourceTree": "ff4fdd51668e7a3ec01d67b5bb987984969c3eef",
+  "sourcePath": "marble-sort-swipe",
+  "runtimeArtifactDigest": "sha256:9b73a1fbbbfed04322b2bf7d3260d2af69816172d2e7a3b975d1f2b8e0c65a3d",
+  "files": {
+    "index.html": "sha256:aad46216f8c4dff3278b9f70891b8fb4afd49c38e6ce0a3df0f84d75afd3c1eb",
+    "payload.js": "sha256:dd72357561950b5c5648b0c9f333f801ba5cc14977434fb7b45537428029b363",
+    "runtime-artifact.json": "sha256:06e7f01af54cf76f12f84c7de42ea4927aca623a749a4add74cdc355b633abc3"
+  },
+  "capabilities": {
+    "sortLevelSpecV1": true,
+    "catalogRequiredHandshake": true,
+    "logicalScheduler": false,
+    "oracleQa": false
+  },
+  "releasePlayable": false
+}

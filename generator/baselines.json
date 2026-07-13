@@ -9,6 +9,16 @@
       "sourcePath": "marble-sort-swipe",
       "artifactPath": "bases/sort-v2",
       "releasePlayable": false
+    },
+    "sort-v2-levels": {
+      "template": "sort",
+      "sourceRepository": "playables",
+      "sourceCommit": "8868888384abb1d0268fd158c083207c485ac4a0",
+      "sourceTree": "ff4fdd51668e7a3ec01d67b5bb987984969c3eef",
+      "sourcePath": "marble-sort-swipe",
+      "artifactPath": "bases/sort-v2-levels",
+      "runtimeArtifactDigest": "sha256:9b73a1fbbbfed04322b2bf7d3260d2af69816172d2e7a3b975d1f2b8e0c65a3d",
+      "releasePlayable": false
     }
   }
 }
