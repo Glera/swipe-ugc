@@ -1,8 +1,8 @@
 {
   "schema": "sort.contract-golden.v1",
   "runtimeContract": {
-    "canonical": "{\"cellColorMapOrder\":\"row-major-top-left\",\"contract\":\"sort.runtime-contract.v1\",\"marblesPerCell\":9,\"palette\":[\"#5BC8D8\",\"#F5C842\",\"#FF7B7B\",\"#7BE87B\",\"#B07BFF\",\"#FF9F43\"],\"rectCapacity\":3,\"rng\":{\"algorithm\":\"mulberry32\",\"derivation\":\"fnv1a32(utf8(name) ++ 0x3A ++ utf8(decimal(seed)))\",\"fnv1a32\":{\"note\":\"тот же алгоритм, что stable_reward_hash; выход uint32 = seed substream'а\",\"offset\":2166136261,\"prime\":16777619},\"substreams\":[\"layout\",\"gameplay\",\"visual\"]},\"ruleConstants\":{\"colorsMax\":6,\"convSpeedBase\":-0.003,\"gridMax\":[8,7]},\"targetStacksOrder\":\"columns-left-to-right-top-down\"}",
-    "sha256": "bc4e272dc02eed01cc53a8deec78026c94c2eaca7e2e51d6934336cc5e87723e"
+    "canonical": "{\"cellColorMapOrder\":\"row-major-top-left\",\"contract\":\"sort.runtime-contract.v1\",\"logicalScheduler\":{\"delayFormula\":\"ceil(milliseconds*ticksPerSecond/millisecondsPerSecond)\",\"delayInput\":\"non-negative-safe-integer-milliseconds\",\"delayRounding\":\"ceil\",\"millisecondsPerSecond\":1000,\"phaseOrder\":[\"due-callbacks\",\"physics\",\"capture-absorb\",\"oracle-action\",\"autoplay-action\",\"terminal-checks\"],\"realtimeCatchUpMaxTicks\":3,\"sameTickOrder\":[\"scheduled-tick\",\"insertion-order\"],\"ticksPerSecond\":60},\"marblesPerCell\":9,\"palette\":[\"#5BC8D8\",\"#F5C842\",\"#FF7B7B\",\"#7BE87B\",\"#B07BFF\",\"#FF9F43\"],\"rectCapacity\":3,\"rng\":{\"algorithm\":\"mulberry32\",\"derivation\":\"fnv1a32(utf8(name) ++ 0x3A ++ utf8(decimal(seed)))\",\"fnv1a32\":{\"note\":\"тот же алгоритм, что stable_reward_hash; выход uint32 = seed substream'а\",\"offset\":2166136261,\"prime\":16777619},\"substreams\":[\"layout\",\"gameplay\",\"visual\"]},\"ruleConstants\":{\"colorsMax\":6,\"convSpeedBase\":-0.003,\"gridMax\":[8,7]},\"targetStacksOrder\":\"columns-left-to-right-top-down\"}",
+    "sha256": "c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625"
   },
   "substreamSeeds": [
     {
@@ -51,11 +51,11 @@
   "levelSpecs": [
     {
       "name": "baseline-medium-seed-137",
-      "identityCanonical": "{\"params\":{\"cellColorMap\":[0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1],\"colorsUsed\":6,\"convSpeedMul\":1,\"gridCols\":8,\"gridRows\":7,\"modifiers\":[],\"targetStacks\":[[0,1],[2,3],[4,5],[0,1]]},\"runtimeContractDigest\":\"bc4e272dc02eed01cc53a8deec78026c94c2eaca7e2e51d6934336cc5e87723e\",\"schema\":\"sort.level-spec.v1\",\"seed\":137}",
+      "identityCanonical": "{\"params\":{\"cellColorMap\":[0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1],\"colorsUsed\":6,\"convSpeedMul\":1,\"gridCols\":8,\"gridRows\":7,\"modifiers\":[],\"targetStacks\":[[0,1],[2,3],[4,5],[0,1]]},\"runtimeContractDigest\":\"c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625\",\"schema\":\"sort.level-spec.v1\",\"seed\":137}",
       "spec": {
         "schema": "sort.level-spec.v1",
-        "specHash": "403a261f5778f87899afa5293af855160c231725594e3ee4a77855ffb76bbce4",
-        "runtimeContractDigest": "bc4e272dc02eed01cc53a8deec78026c94c2eaca7e2e51d6934336cc5e87723e",
+        "specHash": "12b1a5fe32e77e8779d3fc25fda12750c02737390beeabb660f7b3725333dbaa",
+        "runtimeContractDigest": "c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625",
         "seed": 137,
         "params": {
           "gridCols": 8,
@@ -159,8 +159,8 @@
     ],
     "spec": {
       "schema": "sort.level-spec.v1",
-      "specHash": "04a427482831b0a8e15c08a0300f6a43d95afe49e4adff75cd69c462cf0e7afe",
-      "runtimeContractDigest": "bc4e272dc02eed01cc53a8deec78026c94c2eaca7e2e51d6934336cc5e87723e",
+      "specHash": "64586c03364ba5b756ca02abbcafc46e8425277369f53aeef90aff1b3ca55023",
+      "runtimeContractDigest": "c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625",
       "seed": 137,
       "params": {
         "gridCols": 8,

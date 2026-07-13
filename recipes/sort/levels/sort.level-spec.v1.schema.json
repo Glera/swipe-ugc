@@ -13,7 +13,7 @@
       "pattern": "^[0-9a-f]{64}$"
     },
     "runtimeContractDigest": {
-      "const": "bc4e272dc02eed01cc53a8deec78026c94c2eaca7e2e51d6934336cc5e87723e"
+      "const": "c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625"
     },
     "seed": {
       "type": "integer",

@@ -6,6 +6,11 @@ the runtime build must embed a byte-equivalent copy and verify it against the
 golden fixture.
 
 - `sort.runtime-contract.v1.json` is the literal object frozen by ТЗ-2 v2.3.
+  Besides board/RNG constants it owns the exact 60 Hz logical clock, integer
+  `ceil(milliseconds*60/1000)` conversion, FIFO/phase order, and realtime
+  catch-up cap. Changing any of those fields changes `runtimeContractDigest`
+  and therefore creates new LevelSpec identities; an old runtime may still be
+  retained as an equivalence baseline, but cannot evaluate the new specs.
 - `sort.level-spec.v1.schema.json` validates the stored level envelope and all
   JSON-Schema-expressible bounds.
 - `RecipeProposal.schema.json` is the only model-authored input. Its defaults

@@ -26,6 +26,26 @@
       "note": "тот же алгоритм, что stable_reward_hash; выход uint32 = seed substream'а"
     }
   },
+  "logicalScheduler": {
+    "ticksPerSecond": 60,
+    "millisecondsPerSecond": 1000,
+    "delayInput": "non-negative-safe-integer-milliseconds",
+    "delayRounding": "ceil",
+    "delayFormula": "ceil(milliseconds*ticksPerSecond/millisecondsPerSecond)",
+    "sameTickOrder": [
+      "scheduled-tick",
+      "insertion-order"
+    ],
+    "phaseOrder": [
+      "due-callbacks",
+      "physics",
+      "capture-absorb",
+      "oracle-action",
+      "autoplay-action",
+      "terminal-checks"
+    ],
+    "realtimeCatchUpMaxTicks": 3
+  },
   "ruleConstants": {
     "convSpeedBase": -0.003,
     "gridMax": [
