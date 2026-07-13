@@ -16,6 +16,38 @@ function fileDigest(relative) {
   return `sha256:${createHash('sha256').update(readFileSync(path.join(baseRoot, relative))).digest('hex')}`;
 }
 
+function normalizedRuntimeDigest() {
+  const placeholder = Buffer.from(`sha256:${'0'.repeat(64)}`);
+  const embedded = Buffer.from(runtimeManifest.digest);
+  const hash = createHash('sha256');
+  hash.update(Buffer.from('swipe.runtime-artifact.normalized.v1\0'));
+  let replacements = 0;
+  const paths = runtimeManifest.files.map((entry) => entry.path);
+  assert.deepEqual(paths, [...new Set(paths)].sort(), 'runtime executable allowlist must be unique and sorted');
+  for (const entry of runtimeManifest.files) {
+    const original = readFileSync(path.join(baseRoot, entry.path));
+    assert.equal(original.length, entry.bytes);
+    assert.equal(fileDigest(entry.path), entry.sha256);
+    const bytes = Buffer.from(original);
+    let offset = 0;
+    while (offset <= bytes.length - embedded.length) {
+      const index = bytes.indexOf(embedded, offset);
+      if (index < 0) break;
+      placeholder.copy(bytes, index);
+      replacements += 1;
+      offset = index + embedded.length;
+    }
+    const name = Buffer.from(entry.path);
+    const nameLength = Buffer.alloc(4);
+    nameLength.writeUInt32BE(name.length);
+    const byteLength = Buffer.alloc(8);
+    byteLength.writeBigUInt64BE(BigInt(bytes.length));
+    hash.update(nameLength).update(name).update(byteLength).update(bytes);
+  }
+  assert.ok(replacements > 0, 'runtime files must embed their normalized digest');
+  return `sha256:${hash.digest('hex')}`;
+}
+
 test('sort-v2-levels baseline pins the LevelSpec runtime adapter and exact built artifact', () => {
   assert.equal(baseline.sourceCommit, manifest.sourceCommit);
   assert.equal(baseline.sourceTree, manifest.sourceTree);
@@ -31,4 +63,9 @@ test('sort-v2-levels baseline pins the LevelSpec runtime adapter and exact built
   for (const marker of ['catalog_required', 'configure_ready', 'configure_level', 'configured', 'configure_failed']) {
     assert.equal(executable.includes(marker), true, `baseline payload is missing ${marker}`);
   }
+});
+
+test('sort-v2-levels sidecar verifies its executable allowlist without hashing wrapper metadata', () => {
+  assert.equal(runtimeManifest.files.some((entry) => entry.path === 'manifest.json'), false);
+  assert.equal(normalizedRuntimeDigest(), runtimeManifest.digest);
 });
