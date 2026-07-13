@@ -28,3 +28,27 @@ The generator starts both the cell and target pools with balanced colour counts,
 then applies deterministic Fisher-Yates passes. `difficultyTarget` selects the
 mixing profile; it is lineage input, not part of the stored LevelSpec. Actual
 difficulty and solvability are established later by the versioned oracle gate.
+
+## Pinned runtime roles
+
+- `bases/sort-v2-levels` remains the immutable pre-scheduler equivalence
+  baseline. It can detect behavioral drift against the old runtime, but it must
+  not be selected for logical-clock/oracle evaluation.
+- `bases/sort-v2-levels-qa` is a QA-only build from the exact committed
+  playables commit/tree in `generator/baselines.json`. Its descriptor and
+  wrapper manifest pin the runtime contract, built artifact digest, and the
+  logical scheduler/virtual-clock/oracle capabilities. It is always marked
+  `releasePlayable: false` and is not a client runtime pin.
+
+Rebuild and compare it without reading the dirty playables checkout:
+
+```bash
+npm run baseline:sort-qa:write  # isolated clone + committed browser source gate
+npm run baseline:sort-qa:check  # isolated deterministic rebuild + byte compare
+node scripts/runtime-artifact.mjs --verify bases/sort-v2-levels-qa
+```
+
+The builder fixes commit, subtree, package-lock digest, installed toolchain,
+build environment, and UTC build stamp before running the committed Vite and
+post-build transforms. The final command emits only the verified `sha256:…`
+digest on stdout so server-side snapshot resolution can fail closed.

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "sort-v2-levels-qa",
+  "purpose": "level-spec-oracle-qa-base-only",
+  "sourceRepository": "playables",
+  "sourceCommit": "23f6974269e361f022b1393559da4a67c7aaf651",
+  "sourceTree": "4048b492d966503e34c86db8b0dc3da719c4baf1",
+  "sourcePath": "marble-sort-swipe",
+  "runtimeContractDigest": "c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625",
+  "runtimeArtifactDigest": "sha256:d66b4e440358533410dd505f25b7558187df46ca5d8eea562d8648c62f2f9293",
+  "build": {
+    "stampUtc": "2026-07-13 11:13",
+    "packageLockDigest": "sha256:d5f581206398465ee3cd901beb81860f517f71edbc2217761ece2eefcfe8eae5",
+    "toolchain": {
+      "matter-js": "0.20.0",
+      "terser": "5.46.1",
+      "vite": "5.4.21",
+      "vite-plugin-singlefile": "2.3.2"
+    }
+  },
+  "files": {
+    "index.html": "sha256:37381207085523d88a3b3dc427a2fce95e00e62fb1361e133ce7424d960bd811",
+    "payload.js": "sha256:2177a8639eb27a4de98cf1a1dcccfaf8080516aa514222a168bf02be9dc01e68",
+    "runtime-artifact.json": "sha256:1ef7d645ed696591e54b84b385a98ab4bf263075be2a2ab94b525d50581d743d"
+  },
+  "capabilities": {
+    "sortLevelSpecV1": true,
+    "catalogRequiredHandshake": true,
+    "logicalScheduler": true,
+    "virtualClockQa": true,
+    "oracleQa": true,
+    "realtimeOracleSmoke": true
+  },
+  "releasePlayable": false
+}

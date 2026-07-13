@@ -19,6 +19,25 @@
       "artifactPath": "bases/sort-v2-levels",
       "runtimeArtifactDigest": "sha256:9b73a1fbbbfed04322b2bf7d3260d2af69816172d2e7a3b975d1f2b8e0c65a3d",
       "releasePlayable": false
+    },
+    "sort-v2-levels-qa": {
+      "template": "sort",
+      "sourceRepository": "playables",
+      "sourceCommit": "23f6974269e361f022b1393559da4a67c7aaf651",
+      "sourceTree": "4048b492d966503e34c86db8b0dc3da719c4baf1",
+      "sourcePath": "marble-sort-swipe",
+      "artifactPath": "bases/sort-v2-levels-qa",
+      "runtimeContractDigest": "c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625",
+      "runtimeArtifactDigest": "sha256:d66b4e440358533410dd505f25b7558187df46ca5d8eea562d8648c62f2f9293",
+      "capabilities": {
+        "sortLevelSpecV1": true,
+        "catalogRequiredHandshake": true,
+        "logicalScheduler": true,
+        "virtualClockQa": true,
+        "oracleQa": true,
+        "realtimeOracleSmoke": true
+      },
+      "releasePlayable": false
     }
   }
 }
