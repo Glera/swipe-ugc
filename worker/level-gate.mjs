@@ -40,6 +40,7 @@ export const LEVEL_GATE_REQUEST_SCHEMA = 'sort.level-gate-request.v1';
 export const LEVEL_GATE_RESULT_SCHEMA = 'sort.level-gate-result.v1';
 export const LEVEL_GATE_GOLDEN_RESULT_SCHEMA = 'sort.level-gate-golden-result.v1';
 export const LEVEL_GATE_BASELINE_ID = 'sort-v2-levels-qa';
+export const LEVEL_GATE_SKIN_BASELINE_ID = 'sort-v2-skins-qa';
 export const EXPECTED_ORACLE_VERSION = 'sort.oracle.v1';
 export const LEVEL_GATE_STDIN_LIMIT = 256 * 1024;
 
@@ -73,6 +74,14 @@ const BASELINE_CAPABILITIES = Object.freeze([
   'sortLevelSpecV1',
   'virtualClockQa',
 ]);
+const SKIN_BASELINE_CAPABILITIES = Object.freeze([
+  ...BASELINE_CAPABILITIES,
+  'sortSkinSpecV1',
+]);
+const TRUSTED_BASELINE_CAPABILITIES = Object.freeze({
+  [LEVEL_GATE_BASELINE_ID]: BASELINE_CAPABILITIES,
+  [LEVEL_GATE_SKIN_BASELINE_ID]: SKIN_BASELINE_CAPABILITIES,
+});
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const GIT_OBJECT = /^[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -114,7 +123,7 @@ function assertGoldenRecipeMatchesSpec(recipe, spec) {
   }
 }
 
-export function resolveGoldenLevelGate(seed) {
+export function resolveGoldenLevelGate(seed, baselineId = LEVEL_GATE_BASELINE_ID) {
   if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) {
     throw new Error('golden seed must be an unsigned 32-bit integer');
   }
@@ -139,8 +148,11 @@ export function resolveGoldenLevelGate(seed) {
   assertGoldenRecipeMatchesSpec(recipe, selected.spec);
 
   const catalog = parseJsonFile(BASELINE_CATALOG_FILE, 'canonical QA baseline catalog');
-  const descriptor = catalog?.schemaVersion === 1 ? catalog.baselines?.[LEVEL_GATE_BASELINE_ID] : null;
-  if (!descriptor || descriptor.artifactPath !== `bases/${LEVEL_GATE_BASELINE_ID}`
+  if (!Object.hasOwn(TRUSTED_BASELINE_CAPABILITIES, baselineId)) {
+    throw new Error(`untrusted QA baseline ${String(baselineId)}`);
+  }
+  const descriptor = catalog?.schemaVersion === 1 ? catalog.baselines?.[baselineId] : null;
+  if (!descriptor || descriptor.artifactPath !== `bases/${baselineId}`
     || descriptor.runtimeContractDigest !== runtimeContractDigest
     || !isSha256Digest(descriptor.runtimeArtifactDigest)
     || !GIT_OBJECT.test(String(descriptor.sourceCommit || ''))
@@ -151,7 +163,7 @@ export function resolveGoldenLevelGate(seed) {
   const manifestFile = path.join(repoRoot, descriptor.artifactPath, 'manifest.json');
   const manifestBytes = readFileSync(manifestFile);
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
-  if (manifest?.id !== LEVEL_GATE_BASELINE_ID
+  if (manifest?.id !== baselineId
     || manifest.sourceCommit !== descriptor.sourceCommit
     || manifest.sourceTree !== descriptor.sourceTree
     || manifest.runtimeArtifactDigest !== descriptor.runtimeArtifactDigest
@@ -164,7 +176,7 @@ export function resolveGoldenLevelGate(seed) {
     childId: `golden:${seed}:${selected.spec.specHash}`,
     leaseToken: `00000000-0000-4000-8000-${seed.toString(16).padStart(12, '0')}`,
     baseline: {
-      id: LEVEL_GATE_BASELINE_ID,
+      id: baselineId,
       manifestSha256: `sha256:${sha256Bytes(manifestBytes)}`,
       runtimeArtifactDigest: descriptor.runtimeArtifactDigest,
       runtimeContractDigest: descriptor.runtimeContractDigest,
@@ -234,7 +246,9 @@ function normalizeRequest(value) {
     sourceCommit: boundedString(value.baseline.sourceCommit, 'baseline source commit', 40),
     sourceTree: boundedString(value.baseline.sourceTree, 'baseline source tree', 40),
   };
-  if (baseline.id !== LEVEL_GATE_BASELINE_ID) throw new Error(`level gate requires baseline ${LEVEL_GATE_BASELINE_ID}`);
+  if (!Object.hasOwn(TRUSTED_BASELINE_CAPABILITIES, baseline.id)) {
+    throw new Error(`level gate does not trust baseline ${baseline.id}`);
+  }
   if (!isSha256Digest(baseline.manifestSha256) || !isSha256Digest(baseline.runtimeArtifactDigest)) {
     throw new Error('baseline artifact digests must use lowercase sha256');
   }
@@ -280,8 +294,9 @@ function verifyBaseline(request, basesRoot) {
     || manifest.runtimeContractDigest !== request.baseline.runtimeContractDigest
     || manifest.releasePlayable !== false
   ) throw new Error('QA baseline manifest differs from its immutable snapshot');
-  exactKeys(manifest.capabilities, BASELINE_CAPABILITIES, 'QA baseline capabilities');
-  for (const name of BASELINE_CAPABILITIES) {
+  const requiredCapabilities = TRUSTED_BASELINE_CAPABILITIES[request.baseline.id];
+  exactKeys(manifest.capabilities, requiredCapabilities, 'QA baseline capabilities');
+  for (const name of requiredCapabilities) {
     if (manifest.capabilities[name] !== true) throw new Error(`QA baseline capability ${name} is not enabled`);
   }
   if (!manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)) {
@@ -806,10 +821,12 @@ if (invoked) {
         policyDigest: identity.policyDigest,
       }));
       process.exitCode = 0;
-    } else if (args.length === 2 && args[0] === '--golden') {
+    } else if ((args.length === 2 || args.length === 4) && args[0] === '--golden') {
       if (!/^(0|[1-9][0-9]{0,9})$/.test(args[1])) throw new Error('golden seed must be an unsigned 32-bit integer');
       const seed = Number(args[1]);
-      const golden = resolveGoldenLevelGate(seed);
+      if (args.length === 4 && args[2] !== '--baseline') throw new Error('expected --baseline after golden seed');
+      const baselineId = args.length === 4 ? args[3] : LEVEL_GATE_BASELINE_ID;
+      const golden = resolveGoldenLevelGate(seed, baselineId);
       const result = await evaluateSortLevel(golden.request, { basesRoot: path.join(repoRoot, 'bases') });
       const compactResult = summarizeGoldenLevelGate(golden, result);
       console.log(JSON.stringify(compactResult));
@@ -821,7 +838,7 @@ if (invoked) {
       });
       console.log(`RESULT ${JSON.stringify(result)}`);
     } else {
-      throw new Error('usage: level-gate.mjs [--identity | --golden <seed>]');
+      throw new Error('usage: level-gate.mjs [--identity | --golden <seed> [--baseline <id>]]');
     }
   } catch (error) {
     console.error(`ERROR ${JSON.stringify({ error: cleanError(error), incidentId: randomUUID() })}`);

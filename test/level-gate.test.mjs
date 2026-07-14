@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_ORACLE_VERSION,
   LEVEL_GATE_BASELINE_ID,
+  LEVEL_GATE_SKIN_BASELINE_ID,
   LEVEL_GATE_GOLDEN_RESULT_SCHEMA,
   LEVEL_GATE_ORACLE_VERSION_DIGEST,
   LEVEL_GATE_REQUEST_SCHEMA,
@@ -136,6 +137,25 @@ test('--golden resolves only the canonical recipe, LevelSpec, and artifact pin',
   assert.equal(golden.request.spec.runtimeContractDigest, golden.request.baseline.runtimeContractDigest);
   assert.throws(() => resolveGoldenLevelGate(138), /canonical golden LevelSpec.*unavailable/i);
   assert.throws(() => resolveGoldenLevelGate(-1), /unsigned 32-bit integer/i);
+});
+
+test('--golden can pin the skin-capable runtime without changing LevelSpec identity', () => {
+  const legacy = resolveGoldenLevelGate(137);
+  const skinned = resolveGoldenLevelGate(137, LEVEL_GATE_SKIN_BASELINE_ID);
+  assert.equal(skinned.request.baseline.id, LEVEL_GATE_SKIN_BASELINE_ID);
+  assert.equal(
+    skinned.request.baseline.runtimeArtifactDigest,
+    'sha256:8056dcb3c3ff465da923fbb55fce015fa1f8a3820961885b668aad6027b3ea28',
+  );
+  assert.notEqual(
+    skinned.request.baseline.runtimeArtifactDigest,
+    legacy.request.baseline.runtimeArtifactDigest,
+  );
+  assert.deepEqual(skinned.request.spec, legacy.request.spec);
+  assert.throws(
+    () => resolveGoldenLevelGate(137, 'sort-untrusted'),
+    /untrusted QA baseline/,
+  );
 });
 
 test('gate rejects a baseline pin outside the canonical Sort runtime contract before browser work', () => {
