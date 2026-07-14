@@ -1,0 +1,55 @@
+{
+  "canonicalGameplayTokens": [
+    "#5BC8D8",
+    "#F5C842",
+    "#FF7B7B",
+    "#7BE87B",
+    "#B07BFF",
+    "#FF9F43"
+  ],
+  "colorValidation": {
+    "clamp": "linear channels to [0,1] after matrix",
+    "decode": "c<=0.04045 ? c/12.92 : ((c+0.055)/1.055)^2.4",
+    "distance": "Manhattan distance over three quantized output bytes",
+    "encode": "c<=0.0031308 ? 12.92*c : 1.055*c^(1/2.4)-0.055",
+    "input": "uppercase #RRGGBB",
+    "quantization": "Math.round(encoded*255)",
+    "views": {
+      "deuteranopia": {
+        "matrix": [
+          [0.367322, 0.860646, -0.227968],
+          [0.280085, 0.672501, 0.047413],
+          [-0.01182, 0.04294, 0.968881]
+        ],
+        "minPairwiseDistance": 48
+      },
+      "normal": {
+        "matrix": [
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 0, 1]
+        ],
+        "minPairwiseDistance": 52
+      },
+      "protanopia": {
+        "matrix": [
+          [0.152286, 1.052583, -0.204868],
+          [0.114503, 0.786281, 0.099216],
+          [-0.003882, -0.048116, 1.051998]
+        ],
+        "minPairwiseDistance": 75
+      }
+    }
+  },
+  "contract": "sort.skin-contract.v1",
+  "enums": {
+    "backgroundPattern": ["solid", "grid", "stars", "bubbles", "embers"],
+    "marbleStyle": ["glossy", "matte", "glass", "metal", "gem", "bubble", "ember", "obsidian"],
+    "markerStyle": ["none", "rings", "dots", "stripes", "glyphs"],
+    "sourceShape": ["bottle", "hopper", "silo", "flask"],
+    "targetShape": ["capsule", "hex", "jar", "bowl", "crystal"]
+  },
+  "roleCount": 6,
+  "sceneColorFields": ["ground", "edge", "sceneBg", "boardBg", "belt", "outline"],
+  "schema": "sort.skin-spec.v1"
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://p4g.local/schemas/sort.skin-spec.v1.schema.json",
+  "title": "Sort SkinSpec v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "skinHash", "skinContractDigest", "params"],
+  "properties": {
+    "schema": { "const": "sort.skin-spec.v1" },
+    "skinHash": { "$ref": "#/$defs/digest" },
+    "skinContractDigest": {
+      "const": "46594a810964e5ea7a0e9a06af7a370943f98f5616009f1a0123809704f35671"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "marbleStyle",
+        "markerStyle",
+        "targetShape",
+        "sourceShape",
+        "backgroundPattern",
+        "sceneColors",
+        "roleDisplayColors"
+      ],
+      "properties": {
+        "marbleStyle": {
+          "enum": ["glossy", "matte", "glass", "metal", "gem", "bubble", "ember", "obsidian"]
+        },
+        "markerStyle": {
+          "enum": ["none", "rings", "dots", "stripes", "glyphs"]
+        },
+        "targetShape": {
+          "enum": ["capsule", "hex", "jar", "bowl", "crystal"]
+        },
+        "sourceShape": {
+          "enum": ["bottle", "hopper", "silo", "flask"]
+        },
+        "backgroundPattern": {
+          "enum": ["solid", "grid", "stars", "bubbles", "embers"]
+        },
+        "sceneColors": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ground", "edge", "sceneBg", "boardBg", "belt", "outline"],
+          "properties": {
+            "ground": { "$ref": "#/$defs/color" },
+            "edge": { "$ref": "#/$defs/color" },
+            "sceneBg": { "$ref": "#/$defs/color" },
+            "boardBg": { "$ref": "#/$defs/color" },
+            "belt": { "$ref": "#/$defs/color" },
+            "outline": { "$ref": "#/$defs/color" }
+          }
+        },
+        "roleDisplayColors": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/color" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9A-F]{6}$"
+    }
+  }
+}

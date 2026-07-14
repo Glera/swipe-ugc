@@ -1,0 +1,46 @@
+{
+  "skinContractDigest": "46594a810964e5ea7a0e9a06af7a370943f98f5616009f1a0123809704f35671",
+  "validSpec": {
+    "schema": "sort.skin-spec.v1",
+    "skinHash": "0b6681d93f79a357f845fed4ba1b46afd43265d0e55fcc7fe51188a60d4dbfc6",
+    "skinContractDigest": "46594a810964e5ea7a0e9a06af7a370943f98f5616009f1a0123809704f35671",
+    "params": {
+      "marbleStyle": "glossy",
+      "markerStyle": "none",
+      "targetShape": "capsule",
+      "sourceShape": "bottle",
+      "backgroundPattern": "solid",
+      "sceneColors": {
+        "ground": "#5B6B8A",
+        "edge": "#8899AA",
+        "sceneBg": "#5B6B8A",
+        "boardBg": "#4A5878",
+        "belt": "#B4BEC8",
+        "outline": "#8899AA"
+      },
+      "roleDisplayColors": [
+        "#5BC8D8",
+        "#F5C842",
+        "#FF7B7B",
+        "#7BE87B",
+        "#B07BFF",
+        "#FF9F43"
+      ]
+    }
+  },
+  "identityCanonical": "{\"params\":{\"backgroundPattern\":\"solid\",\"marbleStyle\":\"glossy\",\"markerStyle\":\"none\",\"roleDisplayColors\":[\"#5BC8D8\",\"#F5C842\",\"#FF7B7B\",\"#7BE87B\",\"#B07BFF\",\"#FF9F43\"],\"sceneColors\":{\"belt\":\"#B4BEC8\",\"boardBg\":\"#4A5878\",\"edge\":\"#8899AA\",\"ground\":\"#5B6B8A\",\"outline\":\"#8899AA\",\"sceneBg\":\"#5B6B8A\"},\"sourceShape\":\"bottle\",\"targetShape\":\"capsule\"},\"schema\":\"sort.skin-spec.v1\",\"skinContractDigest\":\"46594a810964e5ea7a0e9a06af7a370943f98f5616009f1a0123809704f35671\"}",
+  "colorViews": {
+    "normal": {
+      "minimum": 52,
+      "transformed": [[91, 200, 216], [245, 200, 66], [255, 123, 123], [123, 232, 123], [176, 123, 255], [255, 159, 67]]
+    },
+    "deuteranopia": {
+      "minimum": 48,
+      "transformed": [[166, 179, 216], [234, 210, 73], [186, 174, 120], [221, 205, 130], [90, 149, 252], [211, 190, 68]]
+    },
+    "protanopia": {
+      "minimum": 75,
+      "transformed": [[185, 193, 217], [223, 198, 45], [153, 147, 122], [236, 215, 114], [75, 150, 255], [188, 168, 55]]
+    }
+  }
+}
