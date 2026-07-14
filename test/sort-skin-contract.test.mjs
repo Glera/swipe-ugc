@@ -22,6 +22,10 @@ const manualSkins = JSON.parse(readFileSync(
   new URL('../recipes/sort/skins/fixtures/manual-skins.v1.json', import.meta.url),
   'utf8',
 ));
+const paletteProbes = JSON.parse(readFileSync(
+  new URL('../recipes/sort/skins/fixtures/noncanonical-palette-probes.v1.json', import.meta.url),
+  'utf8',
+));
 const clone = (value) => structuredClone(value);
 const codes = (checked) => checked.errors.map((error) => error.code);
 
@@ -99,4 +103,25 @@ test('six manual directions are accessible and identity-distinct', () => {
     assert.deepEqual(validateSkinSpec(spec), { ok: true, errors: [] }, id);
     assert.equal(computeSkinHash(spec), spec.skinHash, id);
   }
+});
+
+test('non-canonical palette probes exercise acceptance and color-vision rejection', () => {
+  const makeProbe = (probe) => {
+    const candidate = clone(fixture.validSpec);
+    candidate.params.roleDisplayColors = probe.roleDisplayColors;
+    candidate.skinHash = computeSkinHash(candidate);
+    return candidate;
+  };
+  const accepted = makeProbe(paletteProbes.accepted);
+  assert.equal(accepted.skinHash, paletteProbes.accepted.skinHash);
+  assert.deepEqual(validateSkinSpec(accepted), { ok: true, errors: [] });
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(roleColorEvidence(accepted.params.roleDisplayColors))
+      .map(([view, item]) => [view, { minimum: item.minimum, required: item.required }])),
+    paletteProbes.accepted.evidence,
+  );
+
+  const rejected = makeProbe(paletteProbes.rejectedDeuteranopia);
+  assert.equal(rejected.skinHash, paletteProbes.rejectedDeuteranopia.skinHash);
+  assert.deepEqual(codes(validateSkinSpec(rejected)), ['role_colors_deuteranopia']);
 });

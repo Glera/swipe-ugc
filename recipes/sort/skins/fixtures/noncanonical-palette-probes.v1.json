@@ -1,0 +1,21 @@
+{
+  "schema": "sort.skin-palette-probes.v1",
+  "accepted": {
+    "skinHash": "1f4ee0ccdb12a7243c19d4cbe7c4facfa2e32f23d0d16ec3c9ed3dbfc3e95dc3",
+    "roleDisplayColors": ["#22D3EE", "#FDE047", "#F43F5E", "#22C55E", "#A855F7", "#F97316"],
+    "evidence": {
+      "deuteranopia": { "minimum": 54, "required": 48 },
+      "normal": { "minimum": 129, "required": 52 },
+      "protanopia": { "minimum": 128, "required": 75 }
+    }
+  },
+  "rejectedDeuteranopia": {
+    "skinHash": "0a03557d4bc7c7a7830a0216d55eb288b7f724ade9af27582fe6ed10c2d4c235",
+    "roleDisplayColors": ["#38BDF8", "#EAB308", "#E11D48", "#16A34A", "#9333EA", "#EA580C"],
+    "evidence": {
+      "deuteranopia": { "minimum": 29, "required": 48 },
+      "normal": { "minimum": 95, "required": 52 },
+      "protanopia": { "minimum": 132, "required": 75 }
+    }
+  }
+}
