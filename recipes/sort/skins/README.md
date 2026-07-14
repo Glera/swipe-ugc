@@ -18,3 +18,7 @@ directions. `fixtures/skin-qa-archetypes.v1.json` is generated reproducibly by
 the browser matrix. The matrix requires all 30 level/skin pairs to win, keeps
 the complete logical report identical across skins, and verifies distinct
 rendered frames; it does not publish or activate the runtime.
+The opt-in weak-profile check is pinned by `sort.skin-qa-policy.v1.json` and
+runs with `RUN_SORT_SKIN_FPS=1 node --test test/sort-skin-fps-browser.test.mjs`.
+It applies 4× Chromium CPU throttling and enforces the frozen median, p95 and
+long-frame budgets for every manual skin.

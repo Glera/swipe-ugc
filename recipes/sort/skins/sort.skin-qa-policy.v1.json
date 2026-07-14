@@ -1,0 +1,15 @@
+{
+  "schema": "sort.skin-qa-policy.v1",
+  "browser": "playwright-chromium",
+  "viewport": { "width": 390, "height": 700 },
+  "deviceScaleFactor": 1,
+  "cpuThrottlingRate": 4,
+  "warmupFrames": 120,
+  "sampleFrames": 240,
+  "thresholds": {
+    "medianFrameMsMax": 20,
+    "p95FrameMsMax": 40,
+    "longFrameMs": 50,
+    "longFrameRatioMax": 0.02
+  }
+}
