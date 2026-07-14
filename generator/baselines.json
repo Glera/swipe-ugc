@@ -38,6 +38,26 @@
         "realtimeOracleSmoke": true
       },
       "releasePlayable": false
+    },
+    "sort-v2-skins-qa": {
+      "template": "sort",
+      "sourceRepository": "playables",
+      "sourceCommit": "ac0c09d0bcd6038dc3b9bd93f25f0d40cc6643a2",
+      "sourceTree": "071ec2f07f239a2ad1a29e243296949bc963a65f",
+      "sourcePath": "marble-sort-swipe",
+      "artifactPath": "bases/sort-v2-skins-qa",
+      "runtimeContractDigest": "c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625",
+      "runtimeArtifactDigest": "sha256:8056dcb3c3ff465da923fbb55fce015fa1f8a3820961885b668aad6027b3ea28",
+      "capabilities": {
+        "sortLevelSpecV1": true,
+        "sortSkinSpecV1": true,
+        "catalogRequiredHandshake": true,
+        "logicalScheduler": true,
+        "virtualClockQa": true,
+        "oracleQa": true,
+        "realtimeOracleSmoke": true
+      },
+      "releasePlayable": false
     }
   }
 }

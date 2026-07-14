@@ -39,12 +39,38 @@ export const SORT_LEVEL_QA_BASELINE = Object.freeze({
     oracleQa: true,
     realtimeOracleSmoke: true,
   }),
+  purpose: 'level-spec-oracle-qa-base-only',
+});
+
+export const SORT_SKIN_QA_BASELINE = Object.freeze({
+  id: 'sort-v2-skins-qa',
+  sourceRepository: 'playables',
+  sourceCommit: 'ac0c09d0bcd6038dc3b9bd93f25f0d40cc6643a2',
+  sourceTree: '071ec2f07f239a2ad1a29e243296949bc963a65f',
+  sourcePath: 'marble-sort-swipe',
+  runtimeContractDigest: 'c79a84694f02dad356822fa1b3f3d039b8f056f23f1300ff536a072e54c3b625',
+  runtimeArtifactDigest: 'sha256:8056dcb3c3ff465da923fbb55fce015fa1f8a3820961885b668aad6027b3ea28',
+  buildStamp: '2026-07-14 18:00',
+  packageLockDigest: 'sha256:d5f581206398465ee3cd901beb81860f517f71edbc2217761ece2eefcfe8eae5',
+  capabilities: Object.freeze({
+    sortLevelSpecV1: true,
+    sortSkinSpecV1: true,
+    catalogRequiredHandshake: true,
+    logicalScheduler: true,
+    virtualClockQa: true,
+    oracleQa: true,
+    realtimeOracleSmoke: true,
+  }),
+  purpose: 'skin-spec-presentation-qa-base-only',
 });
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const workspace = path.resolve(repoRoot, '..');
-const outputRoot = path.join(repoRoot, 'bases', SORT_LEVEL_QA_BASELINE.id);
+const ACTIVE_BASELINE = process.argv.includes('--skin')
+  ? SORT_SKIN_QA_BASELINE
+  : SORT_LEVEL_QA_BASELINE;
+const outputRoot = path.join(repoRoot, 'bases', ACTIVE_BASELINE.id);
 const DIGEST_PLACEHOLDER = `sha256:${'0'.repeat(64)}`;
 const TOOLCHAIN_PACKAGES = ['matter-js', 'terser', 'vite', 'vite-plugin-singlefile'];
 
@@ -95,15 +121,15 @@ function installedToolchain(nodeModules, lock) {
 }
 
 function sourceSnapshot(playablesRoot) {
-  const actualCommit = git(playablesRoot, 'rev-parse', `${SORT_LEVEL_QA_BASELINE.sourceCommit}^{commit}`);
-  const actualTree = git(playablesRoot, 'rev-parse', `${SORT_LEVEL_QA_BASELINE.sourceCommit}:${SORT_LEVEL_QA_BASELINE.sourcePath}`);
-  if (actualCommit !== SORT_LEVEL_QA_BASELINE.sourceCommit || actualTree !== SORT_LEVEL_QA_BASELINE.sourceTree) {
+  const actualCommit = git(playablesRoot, 'rev-parse', `${ACTIVE_BASELINE.sourceCommit}^{commit}`);
+  const actualTree = git(playablesRoot, 'rev-parse', `${ACTIVE_BASELINE.sourceCommit}:${ACTIVE_BASELINE.sourcePath}`);
+  if (actualCommit !== ACTIVE_BASELINE.sourceCommit || actualTree !== ACTIVE_BASELINE.sourceTree) {
     fail('pinned Sort QA source commit/tree is unavailable or mismatched');
   }
-  const lockBytes = runBytes('git', ['cat-file', 'blob', `${SORT_LEVEL_QA_BASELINE.sourceCommit}:package-lock.json`], {
+  const lockBytes = runBytes('git', ['cat-file', 'blob', `${ACTIVE_BASELINE.sourceCommit}:package-lock.json`], {
     cwd: playablesRoot,
   });
-  if (sha256(lockBytes) !== SORT_LEVEL_QA_BASELINE.packageLockDigest) fail('pinned package-lock digest mismatched');
+  if (sha256(lockBytes) !== ACTIVE_BASELINE.packageLockDigest) fail('pinned package-lock digest mismatched');
   const lock = JSON.parse(lockBytes.toString('utf8'));
   const nodeModules = realpathSync(path.join(playablesRoot, 'node_modules'));
   if (!lstatSync(nodeModules).isDirectory()) fail('trusted playables node_modules is unavailable');
@@ -116,13 +142,13 @@ function controlledBuildEnv() {
   return {
     ...env,
     NODE_ENV: 'production',
-    PLAYABLE: SORT_LEVEL_QA_BASELINE.sourcePath,
+    PLAYABLE: ACTIVE_BASELINE.sourcePath,
     SWIPE: '1',
     TARGET: 'swipe',
     ASSET_FMT: 'avif',
     MRAID_MOCK: '0',
     DEBUG_PROD: '0',
-    BUILD_STAMP: SORT_LEVEL_QA_BASELINE.buildStamp,
+    BUILD_STAMP: ACTIVE_BASELINE.buildStamp,
     RUNTIME_ARTIFACT_DIGEST: DIGEST_PLACEHOLDER,
   };
 }
@@ -140,21 +166,21 @@ function wrapperManifest(stagingRoot, runtimeManifest, toolchain) {
   const runtimeFiles = [...runtimeManifest.files.map((entry) => entry.path), 'runtime-artifact.json'].sort();
   return {
     schemaVersion: 1,
-    id: SORT_LEVEL_QA_BASELINE.id,
-    purpose: 'level-spec-oracle-qa-base-only',
-    sourceRepository: SORT_LEVEL_QA_BASELINE.sourceRepository,
-    sourceCommit: SORT_LEVEL_QA_BASELINE.sourceCommit,
-    sourceTree: SORT_LEVEL_QA_BASELINE.sourceTree,
-    sourcePath: SORT_LEVEL_QA_BASELINE.sourcePath,
-    runtimeContractDigest: SORT_LEVEL_QA_BASELINE.runtimeContractDigest,
+    id: ACTIVE_BASELINE.id,
+    purpose: ACTIVE_BASELINE.purpose,
+    sourceRepository: ACTIVE_BASELINE.sourceRepository,
+    sourceCommit: ACTIVE_BASELINE.sourceCommit,
+    sourceTree: ACTIVE_BASELINE.sourceTree,
+    sourcePath: ACTIVE_BASELINE.sourcePath,
+    runtimeContractDigest: ACTIVE_BASELINE.runtimeContractDigest,
     runtimeArtifactDigest: runtimeManifest.digest,
     build: {
-      stampUtc: SORT_LEVEL_QA_BASELINE.buildStamp,
-      packageLockDigest: SORT_LEVEL_QA_BASELINE.packageLockDigest,
+      stampUtc: ACTIVE_BASELINE.buildStamp,
+      packageLockDigest: ACTIVE_BASELINE.packageLockDigest,
       toolchain,
     },
     files: Object.fromEntries(runtimeFiles.map((relative) => [relative, sha256File(path.join(stagingRoot, relative))])),
-    capabilities: SORT_LEVEL_QA_BASELINE.capabilities,
+    capabilities: ACTIVE_BASELINE.capabilities,
     releasePlayable: false,
   };
 }
@@ -184,8 +210,8 @@ function verifyPackagedBaseline(root) {
   const manifest = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const runtime = verifyRuntimeArtifact(root);
   if (
-    manifest.id !== SORT_LEVEL_QA_BASELINE.id
-    || manifest.runtimeContractDigest !== SORT_LEVEL_QA_BASELINE.runtimeContractDigest
+    manifest.id !== ACTIVE_BASELINE.id
+    || manifest.runtimeContractDigest !== ACTIVE_BASELINE.runtimeContractDigest
     || manifest.runtimeArtifactDigest !== runtime.digest
     || manifest.releasePlayable !== false
   ) fail('packaged QA baseline manifest identity mismatch');
@@ -194,7 +220,7 @@ function verifyPackagedBaseline(root) {
   }
   const payload = readFileSync(path.join(root, 'payload.js'), 'utf8');
   for (const marker of [
-    SORT_LEVEL_QA_BASELINE.runtimeContractDigest,
+    ACTIVE_BASELINE.runtimeContractDigest,
     'sortQa',
     'advanceTicks',
     'chooseOracleAction',
@@ -214,14 +240,14 @@ export function buildSortLevelQaBaseline({ mode = 'check', sourceGate = false } 
   try {
     const checkout = path.join(scratch, 'playables');
     run('git', ['clone', '--shared', '--no-checkout', playablesRoot, checkout], { cwd: scratch });
-    run('git', ['checkout', '--detach', SORT_LEVEL_QA_BASELINE.sourceCommit], { cwd: checkout });
+    run('git', ['checkout', '--detach', ACTIVE_BASELINE.sourceCommit], { cwd: checkout });
     symlinkSync(nodeModules, path.join(checkout, 'node_modules'), 'dir');
     symlinkSync(repoRoot, path.join(scratch, 'swipe-ugc'), 'dir');
 
     if (sourceGate) run('npm', ['run', 'test:sort-level-runtime'], { cwd: checkout });
     const viteCli = path.join(checkout, 'node_modules', 'vite', 'bin', 'vite.js');
     run(process.execPath, [viteCli, 'build'], { cwd: checkout, env: controlledBuildEnv() });
-    const distRoot = path.join(checkout, SORT_LEVEL_QA_BASELINE.sourcePath, 'dist-swipe');
+    const distRoot = path.join(checkout, ACTIVE_BASELINE.sourcePath, 'dist-swipe');
     const html = path.join(distRoot, 'index.html');
     run(process.execPath, [path.join(checkout, 'scripts', 'externalize-videos.mjs'), html], { cwd: checkout });
     run(process.execPath, [path.join(checkout, 'scripts', 'blob-boot-transform.mjs'), html], { cwd: checkout });
@@ -236,16 +262,16 @@ export function buildSortLevelQaBaseline({ mode = 'check', sourceGate = false } 
     run(process.execPath, [
       stampWrapper,
       distRoot,
-      SORT_LEVEL_QA_BASELINE.sourcePath,
-      SORT_LEVEL_QA_BASELINE.sourceCommit,
+      ACTIVE_BASELINE.sourcePath,
+      ACTIVE_BASELINE.sourceCommit,
     ], { cwd: checkout });
     const runtimeManifest = verifyRuntimeArtifact(distRoot, { wrapperMetadata: [] }).manifest;
-    if (runtimeManifest.sourceCommit !== SORT_LEVEL_QA_BASELINE.sourceCommit) fail('runtime sidecar source commit mismatch');
-    if (runtimeManifest.digest !== SORT_LEVEL_QA_BASELINE.runtimeArtifactDigest) {
+    if (runtimeManifest.sourceCommit !== ACTIVE_BASELINE.sourceCommit) fail('runtime sidecar source commit mismatch');
+    if (runtimeManifest.digest !== ACTIVE_BASELINE.runtimeArtifactDigest) {
       fail(`rebuilt runtime digest drifted from its QA pin: ${runtimeManifest.digest}`);
     }
 
-    const stagingRoot = path.join(scratch, SORT_LEVEL_QA_BASELINE.id);
+    const stagingRoot = path.join(scratch, ACTIVE_BASELINE.id);
     mkdirSync(stagingRoot, { recursive: true });
     copyRuntimeArtifact(distRoot, stagingRoot, runtimeManifest);
     const manifest = wrapperManifest(stagingRoot, runtimeManifest, toolchain);
@@ -276,8 +302,8 @@ if (invoked) {
   }
   const mode = process.argv.includes('--write') ? 'write' : 'check';
   const sourceGate = process.argv.includes('--source-gate');
-  if (process.argv.some((arg) => arg.startsWith('--') && !['--write', '--check', '--source-gate'].includes(arg))) {
-    console.error('Usage: node scripts/build-sort-level-qa-baseline.mjs [--check|--write] [--source-gate]');
+  if (process.argv.some((arg) => arg.startsWith('--') && !['--write', '--check', '--source-gate', '--skin'].includes(arg))) {
+    console.error('Usage: node scripts/build-sort-level-qa-baseline.mjs [--check|--write] [--source-gate] [--skin]');
     process.exit(1);
   }
   const result = buildSortLevelQaBaseline({ mode, sourceGate });
