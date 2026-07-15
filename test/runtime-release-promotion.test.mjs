@@ -27,11 +27,13 @@ import { verifyRuntimeArtifact } from '../worker/runtime-artifact.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const baselineRoot = path.join(root, 'bases', 'sort-v2-levels-qa');
+const skinBaselineRoot = path.join(root, 'bases', 'sort-v2-skins-qa');
 const catalogFile = path.join(root, 'generator', 'baselines.json');
 const script = path.join(root, 'scripts', 'promote-runtime-release.mjs');
 const expectedDigest = 'sha256:d66b4e440358533410dd505f25b7558187df46ca5d8eea562d8648c62f2f9293';
 const expectedHex = expectedDigest.slice('sha256:'.length);
 const expectedRelative = `runtime-releases/marble-sort-swipe/${expectedHex}`;
+const expectedSkinDigest = 'sha256:8056dcb3c3ff465da923fbb55fce015fa1f8a3820961885b668aad6027b3ea28';
 
 function scratch(t) {
   const directory = mkdtempSync(path.join(tmpdir(), 'runtime-release-promotion-'));
@@ -72,6 +74,22 @@ test('check mode resolves the real d66b Sort QA identity without writing', (t) =
   const schema = JSON.parse(readFileSync(path.join(root, 'schemas', 'runtime-release.v1.schema.json'), 'utf8'));
   const validate = new Ajv2020({ strict: true }).compile(schema);
   assert.equal(validate(result.descriptor), true, JSON.stringify(validate.errors));
+});
+
+test('check mode accepts the pinned skin presentation QA baseline', (t) => {
+  const { platformRoot } = scratch(t);
+  const result = promoteRuntimeRelease(options(platformRoot, {
+    baselineRoot: skinBaselineRoot,
+    baselineId: 'sort-v2-skins-qa',
+    variant: 'skins-v1',
+  }));
+
+  assert.equal(result.status, 'would_create');
+  assert.equal(result.descriptor.qaBaselineId, 'sort-v2-skins-qa');
+  assert.equal(result.descriptor.variant, 'skins-v1');
+  assert.equal(result.descriptor.runtimeArtifactDigest, expectedSkinDigest);
+  assert.equal(result.descriptor.capabilities.sortSkinSpecV1, true);
+  assert.equal(existsSync(path.join(platformRoot, 'runtime-releases')), false);
 });
 
 test('CLI defaults to check and leaves the target platform byte-for-byte untouched', (t) => {

@@ -29,6 +29,10 @@ const RAW_DIGEST = /^[0-9a-f]{64}$/;
 const GIT_OBJECT = /^[0-9a-f]{40}$/;
 const SAFE_ID = /^[a-z0-9](?:[a-z0-9._-]{0,127})$/;
 const CAPABILITY = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
+const RELEASE_ELIGIBLE_QA_PURPOSES = new Set([
+  'level-spec-oracle-qa-base-only',
+  'skin-spec-presentation-qa-base-only',
+]);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
@@ -132,7 +136,7 @@ function assertPinnedBaseline(catalog, baselineId, wrapper, runtime) {
   if (
     wrapper?.schemaVersion !== 1
     || wrapper.id !== baselineId
-    || wrapper.purpose !== 'level-spec-oracle-qa-base-only'
+    || !RELEASE_ELIGIBLE_QA_PURPOSES.has(wrapper.purpose)
     || wrapper.releasePlayable !== false
     || pin.releasePlayable !== false
     || pin.artifactPath !== `bases/${baselineId}`
