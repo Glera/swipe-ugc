@@ -81,12 +81,11 @@ test('check mode accepts the pinned skin presentation QA baseline', (t) => {
   const result = promoteRuntimeRelease(options(platformRoot, {
     baselineRoot: skinBaselineRoot,
     baselineId: 'sort-v2-skins-qa',
-    variant: 'skins-v1',
   }));
 
   assert.equal(result.status, 'would_create');
   assert.equal(result.descriptor.qaBaselineId, 'sort-v2-skins-qa');
-  assert.equal(result.descriptor.variant, 'skins-v1');
+  assert.equal(result.descriptor.variant, 'base');
   assert.equal(result.descriptor.runtimeArtifactDigest, expectedSkinDigest);
   assert.equal(result.descriptor.capabilities.sortSkinSpecV1, true);
   assert.equal(existsSync(path.join(platformRoot, 'runtime-releases')), false);
