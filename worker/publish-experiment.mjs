@@ -10,7 +10,6 @@
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -25,6 +24,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { assertHardenedExperimentHtml, installExternalNetworkDeny } from './hardening.mjs';
 import { sha256Hex, verifyWorkerResult } from './result-contract.mjs';
+import { readFileExact } from './publish-local.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -205,28 +205,37 @@ async function notify(title, url, ready) {
 
 const artifactPath = path.join(artifactRoot, `${id}.html`);
 const coverPath = path.join(artifactRoot, `${id}.cover.png`);
+const patchPath = path.join(localRoot, `${id}.patch`);
 const manifestPath = path.join(localRoot, `${id}.json`);
 if (!existsSync(artifactPath) || !existsSync(coverPath) || !existsSync(manifestPath)) throw new Error('local experiment artifact or real cover is unavailable');
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+// The complete closure is captured exactly once with hardened no-follow
+// reads; every later gate, hash and publication step uses ONLY these bytes,
+// so the published artifact can never diverge from what was verified.
+const manifestBytes = readFileExact(manifestPath, 'experiment manifest');
+const htmlBytes = readFileExact(artifactPath, 'experiment html');
+const coverBytes = readFileExact(coverPath, 'experiment cover');
+const manifest = JSON.parse(manifestBytes.toString('utf8'));
 if (manifest.id !== id) throw new Error('local experiment manifest id mismatch');
 const typedResult = manifest.schema === 'ugc.experiment-worker-result.v1';
 if (typedResult) {
   // A typed candidate publishes only through its verified closure: the
-  // manifest re-validates in full and the artifact bytes must replay the
-  // digests it committed to.
+  // manifest re-validates in full and the captured bytes must replay every
+  // digest it committed to, including the patch.
   verifyWorkerResult(manifest);
-  if (sha256Hex(readFileSync(artifactPath)) !== manifest.artifact.htmlSha256
-    || sha256Hex(readFileSync(coverPath)) !== manifest.artifact.coverSha256) {
-    throw new Error('local experiment artifact bytes do not replay the typed result identity');
+  const patchBytes = readFileExact(patchPath, 'experiment patch');
+  if (sha256Hex(htmlBytes) !== manifest.artifact.htmlSha256
+    || sha256Hex(coverBytes) !== manifest.artifact.coverSha256
+    || sha256Hex(patchBytes) !== manifest.artifact.patchSha256) {
+    throw new Error('local experiment closure bytes do not replay the typed result identity');
   }
 }
-const html = readFileSync(artifactPath, 'utf8');
+const html = htmlBytes.toString('utf8');
 assertHardenedExperimentHtml(html);
-if (statSync(artifactPath).size > 1024 * 1024) throw new Error('experiment HTML exceeds the 1 MB publish limit');
-if (statSync(coverPath).size > 512 * 1024) throw new Error('experiment cover exceeds the 512 KB publish limit');
+if (htmlBytes.length > 1024 * 1024) throw new Error('experiment HTML exceeds the 1 MB publish limit');
+if (coverBytes.length > 512 * 1024) throw new Error('experiment cover exceeds the 512 KB publish limit');
 if (/<script\b[^>]*\bsrc\s*=/i.test(html)) throw new Error('experiment is not self-contained: external script reference found');
 const htmlHash = createHash('sha1').update(html).digest('hex');
-const coverHash = createHash('sha1').update(readFileSync(coverPath)).digest('hex');
+const coverHash = createHash('sha1').update(coverBytes).digest('hex');
 const version = htmlHash.slice(0, 12);
 const relHtml = `u/${user}/${id}.html`;
 const relCover = `u/${user}/${id}.cover.png`;
@@ -279,9 +288,9 @@ try {
       const targetCover = path.join(worktree, relCover);
       const targetMeta = path.join(worktree, relMeta);
       mkdirSync(path.dirname(targetHtml), { recursive: true });
-      copyFileSync(coverPath, targetCover);
+      writeFileSync(targetCover, coverBytes);
       if (!coverBackfill) {
-        copyFileSync(artifactPath, targetHtml);
+        writeFileSync(targetHtml, htmlBytes);
         writeFileSync(targetMeta, `${JSON.stringify({
           schemaVersion: 1,
           kind: 'free-experiment',
@@ -294,7 +303,7 @@ try {
           title: manifest.title,
           version,
           htmlBytes: Buffer.byteLength(html),
-          coverBytes: statSync(coverPath).size,
+          coverBytes: coverBytes.length,
           payloadBytes: 0,
           inlinePayloadBytes: Buffer.byteLength(html),
           assetBytes: 0,

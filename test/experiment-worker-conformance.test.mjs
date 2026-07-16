@@ -19,7 +19,9 @@ import {
   buildWorkerResult,
   canonicalJson,
   digestOf,
+  redactFailureMessage,
   validateExperimentFeedback,
+  verifyWorkerFailure,
   verifyWorkerResult,
 } from '../worker/result-contract.mjs';
 
@@ -30,8 +32,8 @@ const GOLDEN = JSON.parse(
 
 function resultFields(overrides = {}) {
   return {
-    id: 'gravity-wells-abc1234def',
-    attemptUid: null,
+    id: 'gravity-wells-abc1234def-3f2c1a90-1111-4222-8333-abcdefabcdef',
+    attemptUid: '3f2c1a90-1111-4222-8333-abcdefabcdef',
     parent: { experimentId: 'wild-sort-0123456789', patchSha256: 'b'.repeat(64) },
     baselineId: 'sort-v2',
     provider: 'claude',
@@ -48,16 +50,16 @@ function resultFields(overrides = {}) {
     wallTimeMs: 123456,
     agentInvocations: 1,
     playtestRuns: 2,
-    conformance: { fps: 58 },
-    autoplay: { outcome: 'won', ticks: 1499 },
+    conformance: { idleMs: 30000, rafFrames: 1740 },
+    autoplay: { durationMs: 42000, rafFrames: 2400, runNumber: 1, visualStates: 9 },
     model: 'sonnet',
     effort: 'medium',
     testSeed: 1592791604,
     files: ['marble-sort-swipe/src/main.ts'],
     agentSummary: 'added drifting gravity wells',
     createdAt: '2026-07-16T18:00:00.000Z',
-    url: '/ugc/u/local-experiments/gravity-wells-abc1234def.html',
-    coverUrl: '/ugc/u/local-experiments/gravity-wells-abc1234def.cover.png',
+    url: '/ugc/u/local-experiments/gravity-wells-abc1234def-3f2c1a90-1111-4222-8333-abcdefabcdef.html',
+    coverUrl: '/ugc/u/local-experiments/gravity-wells-abc1234def-3f2c1a90-1111-4222-8333-abcdefabcdef.cover.png',
     coverBytes: 2048,
     artifact: {
       baseCommit: '1'.repeat(40),
@@ -130,8 +132,63 @@ test('typed result exists only for one proven invocation', () => {
     () => buildWorkerResult(resultFields({ parent: { experimentId: 'x', patchSha256: 'b'.repeat(64) } })),
     (error) => error.code === 'invalid_parent',
   );
-  const fresh = buildWorkerResult(resultFields({ parent: null }));
+  const fresh = buildWorkerResult(resultFields({
+    parent: null,
+    attemptUid: null,
+    id: 'gravity-wells-abc1234def',
+    url: '/ugc/u/local-experiments/gravity-wells-abc1234def.html',
+    coverUrl: '/ugc/u/local-experiments/gravity-wells-abc1234def.cover.png',
+  }));
   assert.equal(fresh.parent, null);
+});
+
+test('metrics are frozen exact evidence with real gate bounds', () => {
+  assert.throws(
+    () => buildWorkerResult(resultFields({ conformance: { fps: 60 } })),
+    (error) => error.code === 'unknown_field' || error.code === 'missing_field',
+  );
+  assert.throws(
+    () => buildWorkerResult(resultFields({
+      autoplay: { durationMs: 42000, rafFrames: 2400, runNumber: 3, visualStates: 9 },
+    })),
+    (error) => error.code === 'invalid_result',
+  );
+  assert.throws(
+    () => buildWorkerResult(resultFields({
+      autoplay: { durationMs: 42000, rafFrames: 2400, runNumber: 1, visualStates: 1 },
+    })),
+    (error) => error.code === 'invalid_result',
+  );
+  assert.throws(
+    () => buildWorkerResult(resultFields({ files: ['marble-sort-swipe/assets/logo.png'] })),
+    (error) => error.code === 'invalid_result',
+  );
+  assert.throws(
+    () => buildWorkerResult(resultFields({
+      files: ['marble-sort-swipe/src/main.ts', 'marble-sort-swipe/src/main.ts'],
+    })),
+    (error) => error.code === 'invalid_result',
+  );
+});
+
+test('a rework result requires the durable attempt uuid inside the id', () => {
+  assert.throws(
+    () => buildWorkerResult(resultFields({ attemptUid: null })),
+    (error) => error.code === 'invalid_attempt_uid',
+  );
+  assert.throws(
+    () => buildWorkerResult(resultFields({ attemptUid: 'ABC-not-canonical' })),
+    (error) => error.code === 'invalid_attempt_uid',
+  );
+  const detachedId = resultFields({
+    id: 'gravity-wells-abc1234def',
+    url: '/ugc/u/local-experiments/gravity-wells-abc1234def.html',
+    coverUrl: '/ugc/u/local-experiments/gravity-wells-abc1234def.cover.png',
+  });
+  assert.throws(
+    () => buildWorkerResult(detachedId),
+    (error) => error.code === 'invalid_result' && /untruncated/.test(error.message),
+  );
 });
 
 test('a re-signed forged result fails full domain re-validation', () => {
@@ -205,17 +262,42 @@ test('incomplete evidence is a typed refusal that names what is missing', () => 
   }
 });
 
-test('worker failures are typed and digest-bound', () => {
+test('worker failures are typed, redacted, digest-bound and exactly verifiable', () => {
   const failure = buildWorkerFailure({
     code: 'autoplay_unproven',
-    message: 'autoplay could not prove a win',
+    message: `boom\u001b[31m at ${process.env.HOME || '/home/x'}/secret/path\n  at stack`,
     provider: 'claude',
     model: 'sonnet',
   });
   assert.equal(failure.schema, WORKER_FAILURE_SCHEMA);
   assert.equal(failure.code, 'autoplay_unproven');
+  assert.ok(!failure.message.includes(process.env.HOME || '/home/x'), 'home path must be redacted');
+  assert.ok(!/[\u0000-\u001f]/.test(failure.message), 'control chars must be redacted');
+  assert.deepEqual(verifyWorkerFailure(failure), failure);
+
+  // Exact verifier refuses forged codes, unredacted text and smuggled keys.
   const { failureDigest, ...body } = failure;
-  assert.equal(digestOf(body), failureDigest);
+  const resign = (mutate) => {
+    const forged = mutate({ ...body });
+    return { ...forged, failureDigest: digestOf(forged) };
+  };
+  assert.throws(
+    () => verifyWorkerFailure(resign((b) => ({ ...b, code: 'Not A Code!' }))),
+    (error) => error.code === 'invalid_failure',
+  );
+  assert.throws(
+    () => verifyWorkerFailure(resign((b) => ({ ...b, message: 'x'.repeat(2001) }))),
+    (error) => error.code === 'invalid_failure',
+  );
+  assert.throws(
+    () => verifyWorkerFailure(resign((b) => ({ ...b, smuggled: true }))),
+    (error) => error.code === 'unknown_field',
+  );
+  assert.throws(
+    () => verifyWorkerFailure({ ...failure, message: 'tampered' }),
+    (error) => error.code === 'failure_digest_mismatch',
+  );
+  assert.equal(redactFailureMessage('a\u0000b   c'), 'a b c');
 });
 
 test('experiment worker source keeps the exact contract', () => {

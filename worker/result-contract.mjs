@@ -17,7 +17,8 @@ export const FEEDBACK_MAX_BYTES = 8000;
 const HEX64 = /^[a-f0-9]{64}$/;
 const HEX40 = /^[a-f0-9]{40}$/;
 const EXPERIMENT_ID = /^[a-z0-9-]{8,80}$/;
-const ATTEMPT_UID = /^[a-f0-9-]{8,64}$/;
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SOURCE_FILE = /^marble-sort-swipe\/src\/[A-Za-z0-9._/-]+\.ts$/;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 const ISO_MILLIS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -208,6 +209,41 @@ function requirePlainObject(value, label) {
   return value;
 }
 
+// Metrics are frozen exact evidence, not free-form diagnostics: the fields
+// below are exactly what the conformance and autoplay gates measure, with
+// bounds that a real browser run can actually produce.
+export function validateConformanceMetrics(value) {
+  exactKeys(value, ['idleMs', 'rafFrames'], 'conformance metrics');
+  requireCount(value.idleMs, 'conformance.idleMs', { min: 1, max: 600000 });
+  requireCount(value.rafFrames, 'conformance.rafFrames', { min: 0, max: 10_000_000 });
+  return value;
+}
+
+export function validateAutoplayMetrics(value) {
+  exactKeys(value, ['durationMs', 'rafFrames', 'runNumber', 'visualStates'], 'autoplay metrics');
+  requireCount(value.durationMs, 'autoplay.durationMs', { min: 1, max: 86_400_000 });
+  requireCount(value.rafFrames, 'autoplay.rafFrames', { min: 1, max: 10_000_000 });
+  // The gate itself requires at least two distinct canvas states for a win.
+  requireCount(value.visualStates, 'autoplay.visualStates', { min: 2, max: 1_000_000 });
+  if (![1, 2].includes(value.runNumber)) {
+    throw contractError('invalid_result', 'autoplay.runNumber must be 1 or 2 (single flake retry)');
+  }
+  return value;
+}
+
+export function validateAttemptUid(value, { required = false } = {}) {
+  if (value === null || value === undefined) {
+    if (required) {
+      throw contractError('invalid_attempt_uid', 'a rework run requires the durable attempt UUID');
+    }
+    return null;
+  }
+  if (typeof value !== 'string' || !CANONICAL_UUID.test(value)) {
+    throw contractError('invalid_attempt_uid', 'attemptUid must be a canonical lowercase UUID');
+  }
+  return value;
+}
+
 function validateWorkerResultFields(fields) {
   exactKeys(fields, RESULT_FIELD_KEYS, 'worker result');
   if (fields.autoplayPassed !== true) {
@@ -222,8 +258,9 @@ function validateWorkerResultFields(fields) {
   if (!EXPERIMENT_ID.test(String(fields.id))) {
     throw contractError('invalid_result', 'experiment id is invalid');
   }
-  if (fields.attemptUid !== null && !ATTEMPT_UID.test(String(fields.attemptUid))) {
-    throw contractError('invalid_result', 'attemptUid must be null or a lowercase hex/dash id');
+  validateAttemptUid(fields.attemptUid, { required: fields.parent !== null });
+  if (fields.attemptUid !== null && !String(fields.id).endsWith(`-${fields.attemptUid}`)) {
+    throw contractError('invalid_result', 'candidate id must embed the full untruncated attempt UUID');
   }
   if (!['codex', 'claude'].includes(fields.provider)) {
     throw contractError('invalid_result', 'provider must be codex or claude');
@@ -246,16 +283,24 @@ function validateWorkerResultFields(fields) {
   requireBoundedString(concept.mechanic, 'concept.mechanic', { min: 0, max: 500 });
   requireBoundedString(concept.feeling, 'concept.feeling', { min: 0, max: 240 });
   if (concept.feedback !== null) validateExperimentFeedback(concept.feedback, { required: true });
-  requirePlainObject(fields.conformance, 'conformance');
-  requirePlainObject(fields.autoplay, 'autoplay');
+  validateConformanceMetrics(requirePlainObject(fields.conformance, 'conformance'));
+  validateAutoplayMetrics(requirePlainObject(fields.autoplay, 'autoplay'));
   if (
     !Array.isArray(fields.files)
     || fields.files.length < 1
+    || fields.files.length > 200
+    || new Set(fields.files).size !== fields.files.length
     || fields.files.some(
-      (file) => typeof file !== 'string' || !file.startsWith('marble-sort-swipe/'),
+      (file) => typeof file !== 'string'
+        || file.length > 240
+        || file.includes('..')
+        || !SOURCE_FILE.test(file),
     )
   ) {
-    throw contractError('invalid_result', 'files must list marble-sort-swipe sources');
+    throw contractError(
+      'invalid_result',
+      'files must be unique marble-sort-swipe/src/**.ts paths (the exact validateDiff domain)',
+    );
   }
   const parent = buildParentBinding(fields.parent);
   const artifact = buildArtifactIdentity(fields.artifact);
@@ -303,14 +348,59 @@ export function verifyWorkerResult(result) {
   return result;
 }
 
+const FAILURE_CODE = /^[a-z][a-z0-9_]{2,64}$/;
+const FAILURE_KEYS = ['code', 'message', 'model', 'parent', 'provider', 'schema'];
+const HOME_DIR = process.env.HOME || '';
+
+// Failure text leaves the machine, so it is redacted before it is signed:
+// control characters collapse to spaces, ANSI sequences are dropped, local
+// absolute paths lose the home prefix, and the length is bounded.
+export function redactFailureMessage(raw) {
+  let text = String(raw || '');
+  text = text.replace(/\u001b\[[0-9;]*m/g, '');
+  text = text.replace(/[\u0000-\u001f\u007f]+/g, ' ');
+  if (HOME_DIR) text = text.split(HOME_DIR).join('~');
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.slice(0, 2000);
+}
+
 export function buildWorkerFailure({ code, message, parent = null, provider = null, model = null }) {
+  const safeCode = FAILURE_CODE.test(String(code || '')) ? String(code) : 'worker_failed';
   const failure = {
     schema: WORKER_FAILURE_SCHEMA,
-    code: String(code || 'worker_failed'),
-    message: String(message || '').slice(0, 5000),
+    code: safeCode,
+    message: redactFailureMessage(message),
     parent: parent === null ? null : buildParentBinding(parent),
-    provider,
-    model,
+    provider: provider === null || ['codex', 'claude'].includes(provider) ? provider : null,
+    model: model === null ? null : String(model).slice(0, 80),
   };
   return { ...failure, failureDigest: digestOf(failure) };
+}
+
+// Exact verifier for the typed ERROR channel: consumers must reject anything
+// that is not a well-formed, digest-replaying, redacted failure document.
+export function verifyWorkerFailure(failure) {
+  exactKeys(failure, [...FAILURE_KEYS, 'failureDigest'], 'worker failure document');
+  if (failure.schema !== WORKER_FAILURE_SCHEMA) {
+    throw contractError('invalid_failure', 'unknown worker failure schema');
+  }
+  if (!FAILURE_CODE.test(String(failure.code))) {
+    throw contractError('invalid_failure', 'failure code must be a lowercase snake_case token');
+  }
+  if (typeof failure.message !== 'string' || failure.message.length > 2000
+    || CONTROL_CHARS.test(failure.message) || failure.message !== redactFailureMessage(failure.message)) {
+    throw contractError('invalid_failure', 'failure message must be bounded redacted text');
+  }
+  if (failure.provider !== null && !['codex', 'claude'].includes(failure.provider)) {
+    throw contractError('invalid_failure', 'failure provider must be null, codex or claude');
+  }
+  if (failure.model !== null && (typeof failure.model !== 'string' || failure.model.length > 80)) {
+    throw contractError('invalid_failure', 'failure model must be null or a bounded string');
+  }
+  if (failure.parent !== null) buildParentBinding(failure.parent);
+  const { failureDigest, ...body } = failure;
+  if (digestOf(body) !== failureDigest) {
+    throw contractError('failure_digest_mismatch', 'worker failure digest does not replay');
+  }
+  return failure;
 }

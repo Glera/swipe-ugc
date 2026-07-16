@@ -36,6 +36,7 @@ import {
   assertCompleteEvidence,
   buildWorkerFailure,
   contractError,
+  validateAttemptUid,
   validateExperimentFeedback,
 } from './result-contract.mjs';
 import { loadParentClosure, publishExperimentResult } from './publish-local.mjs';
@@ -571,12 +572,12 @@ async function autoplayWithFlakeRetry(html, attempt, onRun) {
 }
 
 function publishCandidate({ patch, files, baseCommit, agentSummary, html, coverPng, parentBinding, metrics }) {
-  const digest = createHash('sha1').update(baseCommit).update(' ').update(patch).digest('hex').slice(0, 10);
+  const digest = createHash('sha1').update(baseCommit).update('\0').update(patch).digest('hex').slice(0, 10);
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'wild-sort';
   // The candidate id is immutable: content-addressed, and additionally bound
-  // to the generator's immutable attempt when one is supplied, so two runs
-  // can never share one mutable id.
-  const id = attemptUid ? `${slug}-${digest}-${attemptUid.slice(0, 12)}` : `${slug}-${digest}`;
+  // to the FULL untruncated attempt UUID when one is supplied, so two runs
+  // can never share one mutable id and the binding survives verbatim.
+  const id = attemptUid ? `${slug}-${digest}-${attemptUid}` : `${slug}-${digest}`;
   assertHardenedExperimentHtml(html);
   return publishExperimentResult({
     localRoot,
@@ -628,12 +629,12 @@ try {
   feedback = validateExperimentFeedback(args.feedback, { required: Boolean(parentId) });
   invocation = normaliseModelInvocation({ provider, model: selectedModel, effort: REQUESTED_EFFORT });
   EFFORT = invocation.effort;
-  if (args['attempt-uid'] !== undefined) {
-    attemptUid = String(args['attempt-uid']);
-    if (!/^[a-f0-9-]{8,64}$/.test(attemptUid)) {
-      throw contractError('invalid_attempt_uid', 'attempt uid must be a lowercase hex/dash id');
-    }
-  }
+  // A rework run must carry the durable generator attempt UUID so the
+  // candidate id is bound to exactly one immutable attempt/job.
+  attemptUid = validateAttemptUid(
+    args['attempt-uid'] === undefined ? null : String(args['attempt-uid']),
+    { required: Boolean(parentId) },
+  );
   if (!baseline || baseline.template !== 'sort' || baseline.releasePlayable !== false) {
     fail(`unknown or unsafe generator baseline: ${baselineId}`);
   }

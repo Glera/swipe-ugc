@@ -1,7 +1,7 @@
 {
   "fixtureSchema": "ugc.experiment-worker-result-v1.golden",
   "fields": {
-    "id": "golden-orbit-1234567890",
+    "id": "golden-orbit-1234567890-9a8b7c6d-0e1f-4a2b-8c3d-4e5f6a7b8c9d",
     "parent": {
       "experimentId": "wild-sort-0000000001",
       "patchSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
@@ -22,13 +22,14 @@
     "agentInvocations": 1,
     "playtestRuns": 1,
     "conformance": {
-      "fps": 60,
-      "longFrames": 0
+      "idleMs": 30000,
+      "rafFrames": 1650
     },
     "autoplay": {
-      "outcome": "won",
-      "ticks": 987,
-      "actions": 6
+      "durationMs": 21000,
+      "rafFrames": 1200,
+      "runNumber": 2,
+      "visualStates": 5
     },
     "model": "gpt-5.6-sol",
     "effort": "low",
@@ -39,8 +40,8 @@
     ],
     "agentSummary": "wells now breathe on a fixed cycle",
     "createdAt": "2026-07-16T00:00:00.000Z",
-    "url": "/ugc/u/local-experiments/golden-orbit-1234567890.html",
-    "coverUrl": "/ugc/u/local-experiments/golden-orbit-1234567890.cover.png",
+    "url": "/ugc/u/local-experiments/golden-orbit-1234567890-9a8b7c6d-0e1f-4a2b-8c3d-4e5f6a7b8c9d.html",
+    "coverUrl": "/ugc/u/local-experiments/golden-orbit-1234567890-9a8b7c6d-0e1f-4a2b-8c3d-4e5f6a7b8c9d.cover.png",
     "coverBytes": 4096,
     "artifact": {
       "baseCommit": "2222222222222222222222222222222222222222",
@@ -49,7 +50,7 @@
       "coverSha256": "4444444444444444444444444444444444444444444444444444444444444444",
       "patchSha256": "5555555555555555555555555555555555555555555555555555555555555555"
     },
-    "attemptUid": "a1b2c3d4e5f60718"
+    "attemptUid": "9a8b7c6d-0e1f-4a2b-8c3d-4e5f6a7b8c9d"
   },
-  "expectedResultDigest": "a040ddd4a189741934094835345adaed08c395bba5fad252747f7d3731764e30"
+  "expectedResultDigest": "2ce06791a805236d0f0fd14aaca61865a9d9f90a66b8d5e1ce71d4946ac4e68f"
 }

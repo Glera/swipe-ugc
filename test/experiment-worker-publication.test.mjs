@@ -53,8 +53,8 @@ function candidate({ suffix = '', feedback = null } = {}) {
       wallTimeMs: 1000,
       agentInvocations: 1,
       playtestRuns: 1,
-      conformance: { fps: 60 },
-      autoplay: { outcome: 'won' },
+      conformance: { idleMs: 30000, rafFrames: 1800 },
+      autoplay: { durationMs: 15000, rafFrames: 900, runNumber: 1, visualStates: 4 },
       model: 'sonnet',
       effort: 'medium',
       testSeed: 7,
@@ -176,6 +176,55 @@ function runWorker(argv) {
   });
 }
 
+test('interprocess: concurrent worker publications commit one immutable candidate', async () => {
+  const { base, localRoot, artifactRoot } = tempRoots();
+  const script = path.join(base, 'publish-once.mjs');
+  writeFileSync(script, [
+    `import { publishExperimentResult } from ${JSON.stringify(path.join(here, '..', 'worker', 'publish-local.mjs'))};`,
+    'const payload = JSON.parse(process.argv[2]);',
+    'const outcome = publishExperimentResult({',
+    '  localRoot: payload.localRoot,',
+    '  artifactRoot: payload.artifactRoot,',
+    '  fields: payload.fields,',
+    '  html: payload.html,',
+    '  coverPng: Buffer.from(payload.cover),',
+    '  patch: payload.patch,',
+    '});',
+    'console.log(JSON.stringify({ digest: outcome.result.resultDigest, replayed: outcome.replayed }));',
+  ].join('\n'));
+  try {
+    const payload = {
+      localRoot,
+      artifactRoot,
+      fields: candidate().fields,
+      html: '<html data-race="1"/>',
+      cover: [9, 9, 9],
+      patch: 'diff --git a b\n+race\n',
+    };
+    const { spawn } = await import('node:child_process');
+    const runs = await Promise.all(
+      Array.from({ length: 3 }, () => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [script, JSON.stringify(payload)], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '', stderr = '';
+        child.stdout.on('data', (chunk) => { stdout += chunk; });
+        child.stderr.on('data', (chunk) => { stderr += chunk; });
+        child.on('close', (code) => (code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr))));
+      })),
+    );
+    const digests = new Set(runs.map((item) => item.digest));
+    assert.equal(digests.size, 1, 'every process must observe the same immutable candidate');
+    const manifests = readdirSync(localRoot).filter((name) => name.endsWith('.json'));
+    assert.equal(manifests.length, 1);
+    assert.equal(
+      readdirSync(localRoot).filter((name) => name.startsWith('.staging-')).length,
+      0,
+      'no staging directory may survive the race',
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('command level: invalid feedback is a typed single-line ERROR with exit 1', () => {
   const result = runWorker([
     '--provider', 'claude',
@@ -213,6 +262,7 @@ test('command level: an unverifiable parent leaves zero created artifacts', () =
     '--provider', 'claude',
     '--parent', 'missing-parent-000000',
     '--feedback', 'legitimate tuning instruction',
+    '--attempt-uid', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
   ]);
   assert.equal(result.status, 1);
   const line = result.stderr.split('\n').find((item) => item.startsWith('ERROR '));
