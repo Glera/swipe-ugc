@@ -10,6 +10,8 @@ const files = [
   'worker/capture-cover.mjs',
   'worker/experiment.mjs',
   'worker/model-invocation.mjs',
+  'worker/result-contract.mjs',
+  'worker/publish-local.mjs',
   'worker/publish-experiment.mjs',
   'worker/test-preview.mjs',
 ];

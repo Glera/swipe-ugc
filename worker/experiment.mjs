@@ -6,8 +6,8 @@
  * clone pinned to an exact commit/tree. The release checkout and its refs are
  * never writable by the agent. This process validates the diff, type-checks new
  * diagnostics, builds with the known toolchain, injects a network-deny CSP, and
- * runs browser conformance. An unproven win may remain local, but publication
- * always repeats a strict autoplay WIN gate.
+ * runs browser conformance. Incomplete or unproven evidence is a typed,
+ * non-zero failure; publication repeats the strict autoplay WIN gate.
  */
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
@@ -32,6 +32,16 @@ import {
   installExternalNetworkDeny,
 } from './hardening.mjs';
 import { modelInvocationArgs, normaliseModelInvocation } from './model-invocation.mjs';
+import {
+  assertCompleteEvidence,
+  buildWorkerFailure,
+  sanitiseModelEvidence,
+} from './result-contract.mjs';
+import {
+  loadParentClosure,
+  loadWorkerInputEnvelope,
+  publishExperimentResult,
+} from './publish-local.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -42,7 +52,6 @@ const playablesRoot = process.env.PLAYABLES_ROOT
 const localRoot = path.join(repoRoot, '.local-experiments');
 const artifactRoot = path.join(repoRoot, 'u', 'local-experiments');
 const baselineCatalog = JSON.parse(readFileSync(path.join(repoRoot, 'generator', 'baselines.json'), 'utf8'));
-const MAX_ATTEMPTS = Math.max(1, Math.min(3, Number(process.env.UGC_EXPERIMENT_ATTEMPTS || 3)));
 const AGENT_TIMEOUT_MS = Math.max(300, Number(process.env.UGC_EXPERIMENT_AGENT_TIMEOUT_SEC || 86400)) * 1000;
 const TOTAL_TIMEOUT_MS = Math.max(3600, Number(process.env.UGC_EXPERIMENT_TOTAL_TIMEOUT_SEC || 86400)) * 1000;
 const AGENT_SILENCE_WARN_MS = Math.max(1800, Number(process.env.UGC_EXPERIMENT_AGENT_SILENCE_WARN_SEC || 7200)) * 1000;
@@ -50,10 +59,7 @@ const AGENT_HEARTBEAT_MS = Math.max(60, Number(process.env.UGC_EXPERIMENT_HEARTB
 const TEST_TIMEOUT_MS = Math.max(30, Number(process.env.UGC_EXPERIMENT_TEST_TIMEOUT_SEC || 150)) * 1000;
 const IDLE_TEST_MS = Math.max(5, Number(process.env.UGC_EXPERIMENT_IDLE_SEC || 30)) * 1000;
 const MIN_WIN_MS = Math.max(2, Number(process.env.UGC_EXPERIMENT_MIN_WIN_SEC || 3)) * 1000;
-const TEST_SEED = Number(process.env.UGC_EXPERIMENT_TEST_SEED || 0x5eed1234) >>> 0;
-const DEFAULT_CLAUDE_MODEL = process.env.ISLAND_EXPERIMENT_MODEL || 'sonnet';
-const DEFAULT_CODEX_MODEL = String(process.env.CODEX_EXPERIMENT_MODEL || 'gpt-5.6-sol').trim();
-const REQUESTED_EFFORT = String(process.env.CODEX_EXPERIMENT_EFFORT || process.env.ISLAND_EXPERIMENT_EFFORT || '');
+let TEST_SEED = 0;
 const experimentStartedAt = Date.now();
 
 function subscriptionCliEnv(provider) {
@@ -67,25 +73,22 @@ function subscriptionCliEnv(provider) {
 
 const args = {};
 for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];
-const prompt = String(args.prompt || '').trim().slice(0, 500);
-const feedback = String(args.feedback || '').trim().slice(0, 500);
-const parentId = String(args.parent || '').trim();
-const provider = args.provider === 'codex' ? 'codex' : 'claude';
-const requestedModel = String(args.model || '').trim();
-const selectedModel = requestedModel || (provider === 'codex' ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL);
-const invocation = normaliseModelInvocation({ provider, model: selectedModel, effort: REQUESTED_EFFORT });
-const EFFORT = invocation.effort;
-const baselineId = String(args.baseline || 'sort-v2').trim();
-const baseline = baselineCatalog.baselines?.[baselineId];
-if (!baseline || baseline.template !== 'sort' || baseline.releasePlayable !== false) {
-  fail(`unknown or unsafe generator baseline: ${baselineId}`);
-}
-let concept;
-try { concept = JSON.parse(String(args.concept || '{}')); } catch { concept = {}; }
-const title = String(concept.title || 'Wild sort experiment').trim().slice(0, 60);
-const pitch = String(concept.pitch || concept.summary || '').trim().slice(0, 500);
-const mechanic = String(concept.mechanic || '').trim().slice(0, 500);
-const feeling = String(concept.feeling || '').trim().slice(0, 240);
+const inputEnvelopePath = String(args['input-envelope'] || '');
+const expectedInputDigest = String(args['input-digest'] || '');
+let workerInput = null;
+let prompt = '';
+let parentId = '';
+let provider = '';
+let selectedModel = '';
+let baselineId = '';
+let baseline = null;
+let feedback = '';
+let invocation = null;
+let EFFORT = '';
+let title = '';
+let pitch = '';
+let mechanic = '';
+let feeling = '';
 
 function status(phase, message, attempt = 0, details = {}) {
   console.log(`STATUS ${JSON.stringify({ phase, message, attempt, ...details })}`);
@@ -142,18 +145,6 @@ async function runChecked(command, commandArgs, options = {}) {
   return result.stdout;
 }
 
-function loadParent() {
-  if (!parentId) return null;
-  if (!/^[a-z0-9-]{8,80}$/.test(parentId)) fail('invalid parent experiment id');
-  const manifestPath = path.join(localRoot, `${parentId}.json`);
-  const patchPath = path.join(localRoot, `${parentId}.patch`);
-  if (!existsSync(manifestPath) || !existsSync(patchPath)) fail('parent experiment is unavailable on this dev machine');
-  return {
-    manifest: JSON.parse(readFileSync(manifestPath, 'utf8')),
-    patchPath,
-  };
-}
-
 const FORBIDDEN = [
   [/\bfetch\s*\(/i, 'fetch'],
   [/\bXMLHttpRequest\b/i, 'XMLHttpRequest'],
@@ -179,7 +170,7 @@ async function validateDiff(worktree, baseCommit) {
     code: line.slice(0, 2),
     file: line.slice(3).split(' -> ').pop(),
   })).filter((entry) => entry.file !== 'node_modules'); // trusted dependency symlink created above
-  const allChanged = [...new Set(entries.map((entry) => entry.file))];
+  const allChanged = [...new Set(entries.map((entry) => entry.file))].sort();
   if (!allChanged.length) fail('agent made no code changes');
   for (const file of allChanged) {
     if (!/^marble-sort-swipe\/src\/[A-Za-z0-9._/-]+\.ts$/.test(file) || file.includes('..')) {
@@ -217,13 +208,10 @@ async function validateDiff(worktree, baseCommit) {
   return { patch, files: allChanged };
 }
 
-function agentPrompt(attempt, failure) {
-  const repair = failure
-    ? `\nThe previous implementation failed the external gate. Diagnose and EDIT the code to fix it. Gate output:\n${failure.slice(-6000)}\n`
-    : '';
-  const lineage = parentId
-    ? `This is a tuning pass over experiment ${parentId}. Player feedback: ${feedback || 'make the concept more distinctive without losing playability'}.`
-    : 'This is the first implementation of the selected concept.';
+function agentPrompt() {
+  // One job carries exactly one physical model invocation: there is no
+  // internal repair round, so there is no failure transcript to embed.
+  const lineage = `This is a tuning pass over experiment ${parentId}. Player feedback: ${feedback}.`;
   const toolBoundary = provider === 'claude'
     ? 'You have scoped Read/Edit only.'
     : 'You are inside a disposable workspace-write sandbox. The outer worker rejects every path outside marble-sort-swipe/src and runs build/autoplay itself.';
@@ -248,7 +236,7 @@ Hard executable contract:
 - Strange is welcome. Broken is not. Do not reduce the experiment to a palette-only retheme.
 - The resulting lineage patch must change at least 20 source lines; a few constants or colors are not an experiment.
 
-The outer worker, not you, runs build and Playwright. ${toolBoundary} Finish by briefly naming what changed.${repair}`;
+The outer worker, not you, runs build and Playwright. ${toolBoundary} Finish by briefly naming what changed.`;
 }
 
 function latestSourceMtime(worktree) {
@@ -270,9 +258,10 @@ function latestSourceMtime(worktree) {
   return latest;
 }
 
-async function invokeAgent(worktree, attempt, failure, timeboxMs) {
+async function invokeAgent(worktree, timeboxMs) {
   const label = provider === 'codex' ? 'Codex' : 'Claude';
-  status(attempt === 1 ? 'agent' : 'repair', attempt === 1 ? `${label} studies the pinned baseline and mutates the fork` : `${label} repairs the failed experiment`, attempt);
+  const attempt = 1; // exactly one physical model invocation per job
+  status('agent', `${label} studies the pinned baseline and mutates the fork`, attempt);
   const command = provider === 'codex' ? 'codex' : 'claude';
   const commandArgs = provider === 'codex'
     ? [
@@ -285,7 +274,7 @@ async function invokeAgent(worktree, attempt, failure, timeboxMs) {
         '--ephemeral',
         '--ignore-user-config',
         '--ignore-rules',
-        agentPrompt(attempt, failure),
+        agentPrompt(),
       ]
     : [
         '--no-session-persistence',
@@ -294,7 +283,7 @@ async function invokeAgent(worktree, attempt, failure, timeboxMs) {
         '--tools', 'Read,Edit',
         '--allowedTools', 'Read(./marble-sort-swipe/**),Read(./shared/**),Edit(./marble-sort-swipe/src/**)',
         ...modelInvocationArgs(invocation),
-        '-p', agentPrompt(attempt, failure),
+        '-p', agentPrompt(),
       ];
   const passStartedAt = Date.now();
   let observedSourceMtime = latestSourceMtime(worktree);
@@ -574,71 +563,88 @@ async function autoplayWithFlakeRetry(html, attempt, onRun) {
   }
 }
 
-async function publishLocal(patch, files, baseCommit, attempts, agentSummary, autoplayPassed, gateError, html, coverPng, metrics) {
-  const digest = createHash('sha1').update(baseCommit).update('\0').update(patch).digest('hex').slice(0, 10);
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'wild-sort';
-  const id = `${slug}-${digest}`;
-  mkdirSync(localRoot, { recursive: true });
-  mkdirSync(artifactRoot, { recursive: true });
+function publishCandidate({ patch, files, agentSummary, html, coverPng, metrics }) {
   assertHardenedExperimentHtml(html);
-  writeFileSync(path.join(artifactRoot, `${id}.html`), html);
-  writeFileSync(path.join(artifactRoot, `${id}.cover.png`), coverPng);
-  writeFileSync(path.join(localRoot, `${id}.patch`), patch);
-  const manifest = {
-    id,
-    parentId: parentId || null,
-    baselineId,
-    baselineTree: baseline.sourceTree,
-    provider,
-    baseCommit,
-    title,
-    pitch,
-    mechanic,
-    feeling,
-    prompt,
-    feedback: feedback || null,
-    attempts,
-    autoplayPassed,
-    gateError,
-    wallTimeMs: Date.now() - experimentStartedAt,
-    agentTimeoutSec: Math.round(AGENT_TIMEOUT_MS / 1000),
-    agentSilenceWarnSec: Math.round(AGENT_SILENCE_WARN_MS / 1000),
-    totalTimeoutSec: Math.round(TOTAL_TIMEOUT_MS / 1000),
-    agentInvocations: metrics.agentInvocations,
-    playtestRuns: metrics.playtestRuns,
-    conformance: metrics.conformance,
-    autoplay: metrics.autoplay,
-    model: selectedModel,
-    effort: EFFORT,
-    testSeed: TEST_SEED,
-    files,
-    agentSummary,
-    createdAt: new Date().toISOString(),
-    url: `/ugc/u/local-experiments/${id}.html`,
-    coverUrl: `/ugc/u/local-experiments/${id}.cover.png`,
-    coverBytes: coverPng.length,
-  };
-  writeFileSync(path.join(localRoot, `${id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
-  return manifest;
+  return publishExperimentResult({
+    localRoot,
+    artifactRoot,
+    input: workerInput,
+    html,
+    coverPng,
+    patch,
+    fields: {
+      title,
+      concept: {
+        prompt,
+        pitch,
+        mechanic,
+        feeling,
+      },
+      autoplayPassed: true,
+      wallTimeMs: Date.now() - experimentStartedAt,
+      agentInvocations: metrics.agentInvocations,
+      playtestRuns: metrics.playtestRuns,
+      conformance: metrics.conformance,
+      autoplay: metrics.autoplay,
+      files,
+      agentSummary,
+      createdAt: new Date().toISOString(),
+      coverBytes: coverPng.length,
+    },
+  });
 }
 
 let worktree = '';
 try {
+  const allowedArgs = new Set(['input-digest', 'input-envelope']);
+  const foreignArg = Object.keys(args).find((key) => !allowedArgs.has(key));
+  if (foreignArg) {
+    const error = new Error(`parallel CLI authority is forbidden: --${foreignArg}`);
+    error.code = 'experiment_worker_input_invalid';
+    throw error;
+  }
+  workerInput = loadWorkerInputEnvelope({ inputPath: inputEnvelopePath, expectedInputDigest });
+  prompt = 'Implement the exact reviewed tuning goal.';
+  parentId = workerInput.parent.targetId;
+  provider = workerInput.model.provider;
+  selectedModel = workerInput.model.argument;
+  baselineId = workerInput.baseline.id;
+  baseline = baselineCatalog.baselines?.[baselineId];
+  feedback = workerInput.request.instruction;
+  TEST_SEED = workerInput.worker.testSeed;
+  invocation = normaliseModelInvocation({
+    provider,
+    model: selectedModel,
+    effort: workerInput.model.effort,
+  });
+  EFFORT = invocation.effort;
+  if (!baseline || baseline.template !== 'sort' || baseline.releasePlayable !== false) {
+    fail(`unknown or unsafe generator baseline: ${baselineId}`);
+  }
   if (!existsSync(path.join(playablesRoot, '.git'))) fail(`playables repo not found: ${playablesRoot}`);
-  const parent = loadParent();
-  const baseCommit = String(baseline.sourceCommit);
+  // Parent closure is captured exactly once with hardened no-follow reads:
+  // manifest is a verified typed result, patch/html/cover bytes replay its
+  // artifact identity, and only the captured patch bytes are ever applied.
+  const parent = loadParentClosure({
+    localRoot,
+    artifactRoot,
+    expectedArtifact: workerInput.parent.evidence.parentArtifact,
+  });
+  title = String(parent.manifest.title || 'Reworked sort experiment');
+  pitch = String(parent.manifest.concept?.pitch || 'Apply the reviewed tuning without changing lineage.');
+  mechanic = String(parent.manifest.concept?.mechanic || 'Preserve the parent rule and improve its legibility.');
+  feeling = String(parent.manifest.concept?.feeling || 'A clearer version of the reviewed payoff.');
+  const baseCommit = workerInput.baseline.sourceCommit;
   const actualCommit = (await runChecked('git', ['rev-parse', `${baseCommit}^{commit}`], { cwd: playablesRoot })).trim();
   const actualTree = (await runChecked('git', ['rev-parse', `${baseCommit}:${baseline.sourcePath}`], { cwd: playablesRoot })).trim();
-  if (actualCommit !== baseCommit || actualTree !== baseline.sourceTree) {
+  if (baseline.sourceCommit !== workerInput.baseline.sourceCommit
+    || baseline.sourceTree !== workerInput.baseline.sourceTree
+    || actualCommit !== baseCommit || actualTree !== workerInput.baseline.sourceTree) {
     fail(`generator baseline ${baselineId} failed its immutable commit/tree lock`);
-  }
-  if (parent) {
-    const parentBaseline = parent.manifest.baselineId || (parent.manifest.baseCommit === baseCommit ? baselineId : '');
-    if (parentBaseline !== baselineId) fail('parent experiment belongs to a different generator baseline');
   }
   worktree = mkdtempSync(path.join(tmpdir(), 'swipe-wild-sort-'));
   rmSync(worktree, { recursive: true, force: true });
-  status('fork', parent ? 'Restoring the parent experiment in an isolated fork' : 'Creating an isolated mechanic fork');
+  status('fork', 'Restoring the exact reviewed parent experiment in an isolated fork');
   await runChecked('git', ['clone', '--shared', '--no-checkout', playablesRoot, worktree], { cwd: workspace, timeoutMs: 60000 });
   await runChecked('git', ['checkout', '--detach', baseCommit], { cwd: worktree, timeoutMs: 60000 });
   const cloneHead = (await runChecked('git', ['rev-parse', 'HEAD'], { cwd: worktree })).trim();
@@ -646,64 +652,80 @@ try {
   const dependencies = path.join(playablesRoot, 'node_modules');
   if (!existsSync(dependencies)) fail('playables/node_modules is missing; run npm ci before starting the local lab');
   symlinkSync(dependencies, path.join(worktree, 'node_modules'), 'dir');
-  if (parent) await runChecked('git', ['apply', '--whitespace=nowarn', parent.patchPath], { cwd: worktree });
+  // Apply ONLY the captured closure bytes from a path this process owns —
+  // the parent pathname is never re-opened after verification.
+  const capturedPatch = path.join(worktree, '.parent-closure.patch');
+  writeFileSync(capturedPatch, parent.patchBytes);
+  await runChecked('git', ['apply', '--whitespace=nowarn', capturedPatch], { cwd: worktree });
+  rmSync(capturedPatch, { force: true });
   status('typecheck-baseline', 'Recording pre-existing diagnostics so only new errors consume the experiment budget');
   const baselineDiagnostics = new Set((await collectTypeDiagnostics(worktree)).map(normalizeDiagnostic));
 
-  let lastFailure = '', agentSummary = '', validated = null, artifactHtml = '', coverPng = null, wonAt = 0;
-  let autoplayPassed = true, gateError = null;
-  let agentInvocations = 0, playtestRuns = 0, conformanceMetrics = null, autoplayMetrics = null;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    try {
-      const remainingMs = experimentStartedAt + TOTAL_TIMEOUT_MS - Date.now();
-      if (remainingMs < 300000) throw new Error('EXPERIMENT DEADLINE: the 24-hour job budget is exhausted');
-      agentInvocations++;
-      agentSummary = await invokeAgent(worktree, attempt, lastFailure, Math.min(AGENT_TIMEOUT_MS, remainingMs));
-      status('safety', 'Checking the code sandbox and patch budget', attempt);
-      validated = await validateDiff(worktree, baseCommit);
-      if (parent && validated.patch === readFileSync(parent.patchPath, 'utf8')) {
-        throw new Error('TUNING FAILED: Claude did not change the parent experiment');
-      }
-      await typecheck(worktree, validated.files, baselineDiagnostics, attempt);
-      await build(worktree, attempt);
-      artifactHtml = selfContainedArtifact(worktree);
-      const conformanceResult = await conformance(artifactHtml, attempt);
-      conformanceMetrics = conformanceResult.metrics;
-      coverPng = conformanceResult.coverPng;
-      const playtest = await autoplayWithFlakeRetry(artifactHtml, attempt, () => { playtestRuns++; });
-      autoplayMetrics = playtest.result;
-      wonAt = attempt;
-      break;
-    } catch (error) {
-      lastFailure = error instanceof Error ? error.message : String(error);
-      if (error instanceof AutoplayIncompleteError && validated) {
-        autoplayPassed = false;
-        gateError = lastFailure;
-        wonAt = attempt;
-        status('soft-gate', 'Build is healthy, but autoplay could not prove a win; keeping the local experiment', attempt);
-        break;
-      }
-      status('failed-attempt', lastFailure.slice(0, 360), attempt);
-      if (attempt === MAX_ATTEMPTS) throw error;
-    }
+  // Exact worker contract: one physical model invocation, then one honest
+  // gate pass. There is no internal repair loop and no soft success — an
+  // unproven autoplay win or incomplete evidence is a typed non-zero exit,
+  // and the repair/rework cycle belongs to the generator's job layer.
+  let playtestRuns = 0;
+  const remainingMs = experimentStartedAt + TOTAL_TIMEOUT_MS - Date.now();
+  if (remainingMs < 300000) throw new Error('EXPERIMENT DEADLINE: the 24-hour job budget is exhausted');
+  const agentSummary = await invokeAgent(worktree, Math.min(AGENT_TIMEOUT_MS, remainingMs));
+  status('safety', 'Checking the code sandbox and patch budget', 1);
+  const validated = await validateDiff(worktree, baseCommit);
+  if (validated.patch === parent.patchBytes.toString('utf8')) {
+    const unchanged = new Error('TUNING FAILED: the agent did not change the parent experiment');
+    unchanged.code = 'tuning_unchanged';
+    throw unchanged;
   }
-  if (!validated || !artifactHtml || !coverPng || !wonAt) fail('experiment exhausted its repair budget');
-  status('publish', autoplayPassed ? 'Autoplay won; saving the local experiment' : 'Saving the unverified local experiment', wonAt);
-  const result = await publishLocal(
-    validated.patch,
-    validated.files,
-    baseCommit,
-    wonAt,
-    agentSummary,
-    autoplayPassed,
-    gateError,
+  await typecheck(worktree, validated.files, baselineDiagnostics, 1);
+  await build(worktree, 1);
+  const artifactHtml = selfContainedArtifact(worktree);
+  const conformanceResult = await conformance(artifactHtml, 1);
+  let autoplayMetrics;
+  try {
+    const playtest = await autoplayWithFlakeRetry(artifactHtml, 1, () => { playtestRuns++; });
+    autoplayMetrics = playtest.result;
+  } catch (error) {
+    if (error instanceof AutoplayIncompleteError) {
+      error.code = 'autoplay_unproven';
+    }
+    throw error;
+  }
+  assertCompleteEvidence({
+    validated,
     artifactHtml,
-    coverPng,
-    { agentInvocations, playtestRuns, conformance: conformanceMetrics, autoplay: autoplayMetrics },
-  );
-  console.log(`RESULT ${JSON.stringify(result)}`);
+    coverPng: conformanceResult.coverPng,
+    autoplayPassed: true,
+    conformanceMetrics: conformanceResult.metrics,
+    autoplayMetrics,
+  });
+  status('publish', 'Autoplay won; saving the local experiment', 1);
+  const published = publishCandidate({
+    patch: validated.patch,
+    files: validated.files,
+    agentSummary,
+    html: artifactHtml,
+    coverPng: conformanceResult.coverPng,
+    metrics: {
+      agentInvocations: 1,
+      playtestRuns,
+      conformance: conformanceResult.metrics,
+      autoplay: autoplayMetrics,
+    },
+  });
+  if (published.replayed) {
+    status('publish-replayed', 'Identical immutable candidate already committed; replaying its exact bytes', 1);
+  }
+  console.log(`RESULT ${JSON.stringify(published.result)}`);
 } catch (error) {
-  console.error(`ERROR ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`);
+  const code = typeof error?.code === 'string' ? error.code : 'worker_failed';
+  const message = error instanceof Error ? error.message : String(error);
+  const failure = workerInput
+    ? buildWorkerFailure({ input: workerInput, code, message })
+    : {
+        code: 'experiment_worker_input_invalid',
+        message: sanitiseModelEvidence(message, 2000),
+      };
+  console.log(`ERROR ${JSON.stringify(failure)}`);
   process.exitCode = 1;
 } finally {
   if (worktree) rmSync(worktree, { recursive: true, force: true });

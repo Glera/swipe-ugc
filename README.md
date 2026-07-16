@@ -83,13 +83,23 @@ The current visual/rAF checks intentionally target the only wild baseline,
 Canvas sort; a DOM/WebGL baseline must register renderer-specific probes before
 it can enter the catalog.
 
-An inconclusive physics autoplay is rerun once on the exact same build before a
-new model call. A healthy/runtime-safe build whose win is still unproven may be
-shown and tuned locally with `autoplayPassed:false`; publication remains strict
-WIN-only. Up to three hard repair passes share one 24-hour job budget. A living,
-silent agent is not killed: five-minute PID/output/file-edit heartbeats remain
-visible as structured `agent`/`quiet` liveness, and only an observed process exit
-or the explicit day deadline can consume an attempt.
+An inconclusive physics autoplay is rerun once on the exact same build (flake
+quarantine), never with a new model call. The worker holds an exact contract:
+one job carries exactly ONE physical model invocation; an unproven win or
+incomplete evidence is a typed non-zero `ERROR`, never a soft success; a typed
+`RESULT` (`ugc.experiment-worker-result.v1`) carries parent binding, artifact
+identity and a deterministic self-digest, and its publication is append-only
+(staged, no-overwrite, manifest committed last; identical replay or typed
+conflict). Rework execution accepts only a bounded, hardened
+`--input-envelope <absolute-path> --input-digest sha256:…` pair using
+`lab.experiment-worker-input.v1`; request/attempt/job/receipt, provider/model,
+effort, parent closure, baseline, gate version and test seed are derived only
+from that server-owned envelope. Parallel CLI overrides fail closed. Reviewer
+feedback is exact 1..2000 printable characters, and the durable attempt UUID
+is embedded untruncated in the candidate id. Repair/rework cycles
+belong to the generator job layer, not to the worker. A living, silent agent
+is not killed: five-minute PID/output/file-edit heartbeats remain visible as
+structured `agent`/`quiet` liveness.
 
 The lab strips Anthropic and OpenAI API variables from concept and coding
 subprocesses. It uses local CLI subscription logins and cannot silently fall
@@ -108,8 +118,9 @@ failure even if the page is closed. `UGC_NOTIFY_CHAT_ID` is strictly a
 dev-machine fallback and must not be carried into a shared server runtime.
 
 Explicit **Publish tested artifact** runs `worker/publish-experiment.mjs`. It
-repeats sandbox autoplay, creates a detached worktree from `origin`, verifies a
-two-path commit allowlist (`.html` + `.meta.json`), pushes that commit, and polls
+requires the same exact input-envelope binding for typed candidates, repeats
+sandbox autoplay, creates a detached worktree from `origin`, verifies a
+three-path commit allowlist (`.html` + `.cover.png` + `.meta.json`), pushes that commit, and polls
 the immutable Render URL. The source patch remains ignored and no `playables`
 file is copied or committed. Model execution still happens only through the
 local subscription; publication does not call the Anthropic API.
@@ -120,10 +131,9 @@ local subscription; publication does not call the Anthropic API.
 |---|---|
 | `UGC_TEST_TIMEOUT_SEC` | Full autoplay WIN timeout. Defaults to 180 seconds; values below 30 are clamped. |
 | `UGC_DRY_RUN=1` | Bake and run the full WIN gate, then remove generated artifacts without committing or pushing. |
-| `ISLAND_EXPERIMENT_MODEL` | Claude Code model for the local free experiment. Defaults to `sonnet`; set `opus` for slower, wider exploration. |
-| `ISLAND_EXPERIMENT_EFFORT` | Claude Code reasoning effort for implementation. Defaults to `medium`; accepts `low/medium/high/xhigh`. |
+| `ISLAND_EXPERIMENT_MODEL` | Generator-side default used before it resolves and signs the immutable worker input. The worker itself does not read this as authority. |
+| `ISLAND_EXPERIMENT_EFFORT` | Generator-side default used before it resolves and signs the immutable worker input. The worker itself does not read this as authority. |
 | `ISLAND_EXPERIMENT_CONCEPT_MODEL` | Claude Code model used by the local generator to roll three concepts. Defaults to `sonnet`. |
-| `UGC_EXPERIMENT_ATTEMPTS` | Local agent/build/autoplay attempts, clamped to 1–3. Defaults to 3. |
 | `UGC_EXPERIMENT_TOTAL_TIMEOUT_SEC` | Total durable creative-job deadline. Defaults to 86400 seconds (24h). |
 | `UGC_EXPERIMENT_AGENT_TIMEOUT_SEC` | Maximum for one local coding pass, capped by remaining total budget. Defaults to 86400 seconds. |
 | `UGC_EXPERIMENT_AGENT_SILENCE_WARN_SEC` | Mark a living agent as silent after no output or `.ts` edits; never kills it. Defaults to 7200 seconds. |
