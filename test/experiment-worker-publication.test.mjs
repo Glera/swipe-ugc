@@ -1,13 +1,12 @@
-// Publication and parent-closure hardening for the exact worker contract:
-// append-only race-safe commits, hardened no-follow parent reads, and typed
-// command-level failures with zero created artifacts.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -17,11 +16,25 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { loadParentClosure, publishExperimentResult } from '../worker/publish-local.mjs';
-import { buildWorkerResult, sha256Hex } from '../worker/result-contract.mjs';
+import {
+  loadParentClosure,
+  loadWorkerInputEnvelope,
+  publishExperimentResult,
+  readFileExact,
+} from '../worker/publish-local.mjs';
+import {
+  canonicalJson,
+  sha256Hex,
+  verifyWorkerFailure,
+} from '../worker/result-contract.mjs';
+import { parseExperimentWorkerTerminal } from '../../swipe-generator/src/experiment-worker-evidence.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workerScript = path.join(here, '..', 'worker', 'experiment.mjs');
+const golden = JSON.parse(readFileSync(path.resolve(
+  here, '..', '..', 'swipe-generator', 'test', 'fixtures',
+  'experiment-worker-wire-v1.golden.json',
+), 'utf8'));
 
 function tempRoots() {
   const base = mkdtempSync(path.join(tmpdir(), 'worker-publication-'));
@@ -32,42 +45,41 @@ function tempRoots() {
   };
 }
 
-function candidate({ suffix = '', feedback = null } = {}) {
+function candidate({ suffix = '' } = {}) {
+  const { feedback: _feedback, ...concept } = golden.result.concept;
   return {
+    input: golden.input,
     fields: {
-      id: `orbital-fixture-000${suffix || '1'}`,
-      attemptUid: null,
-      parent: null,
-      baselineId: 'sort-v2',
-      provider: 'claude',
-      baseCommit: '7'.repeat(40),
-      title: 'Orbital Fixture',
-      concept: {
-        prompt: 'fixture',
-        feedback,
-        pitch: 'fixture pitch',
-        mechanic: 'fixture mechanic',
-        feeling: 'fixture feeling',
-      },
+      title: golden.result.title,
+      concept,
       autoplayPassed: true,
       wallTimeMs: 1000,
       agentInvocations: 1,
       playtestRuns: 1,
       conformance: { idleMs: 30000, rafFrames: 1800 },
       autoplay: { durationMs: 15000, rafFrames: 900, runNumber: 1, visualStates: 4 },
-      model: 'sonnet',
-      effort: 'medium',
-      testSeed: 7,
       files: ['marble-sort-swipe/src/main.ts'],
       agentSummary: 'fixture summary',
       createdAt: '2026-07-16T00:00:00.000Z',
-      url: `/ugc/u/local-experiments/orbital-fixture-000${suffix || '1'}.html`,
-      coverUrl: `/ugc/u/local-experiments/orbital-fixture-000${suffix || '1'}.cover.png`,
-      coverBytes: 3,
+      coverBytes: 999,
     },
     html: `<html data-suffix="${suffix}"/>`,
     coverPng: Buffer.from([1, 2, suffix ? 9 : 3]),
     patch: `diff --git a b\n+fixture ${suffix}\n`,
+  };
+}
+
+function expectedArtifact(result, localRoot) {
+  return {
+    schema: 'lab.experiment-artifact-identity.v1',
+    experimentId: result.id,
+    baselineId: result.baselineId,
+    baseCommit: result.baseCommit,
+    baselineTree: result.baselineTree,
+    manifestSha256: sha256Hex(readFileSync(path.join(localRoot, `${result.id}.json`))),
+    patchSha256: result.artifact.patchSha256,
+    htmlSha256: result.artifact.htmlSha256,
+    coverSha256: result.artifact.coverSha256,
   };
 }
 
@@ -76,18 +88,16 @@ test('publication is append-only with identical replay and typed conflict', () =
   try {
     const first = publishExperimentResult({ localRoot, artifactRoot, ...candidate() });
     assert.equal(first.replayed, false);
-    const committed = JSON.parse(
+    assert.equal(first.result.coverBytes, candidate().coverPng.length);
+    assert.equal(
       readFileSync(path.join(localRoot, `${first.result.id}.json`), 'utf8'),
+      `${JSON.stringify(first.result, null, 2)}\n`,
     );
-    assert.equal(committed.resultDigest, first.result.resultDigest);
-
-    // Identical bytes: exact replay of the committed candidate, no rewrite.
     const replay = publishExperimentResult({ localRoot, artifactRoot, ...candidate() });
     assert.equal(replay.replayed, true);
     assert.equal(replay.result.resultDigest, first.result.resultDigest);
 
-    // Same id with different bytes: typed conflict, committed bytes intact.
-    const conflicting = candidate({ suffix: '' });
+    const conflicting = candidate();
     conflicting.html = '<html data-forged="true"/>';
     assert.throws(
       () => publishExperimentResult({ localRoot, artifactRoot, ...conflicting }),
@@ -103,66 +113,120 @@ test('publication is append-only with identical replay and typed conflict', () =
   }
 });
 
-test('concurrent publication of one candidate yields one immutable result', async () => {
+test('parent closure is server-evidence-bound and refuses swapped pathnames', () => {
   const { base, localRoot, artifactRoot } = tempRoots();
   try {
-    const outcomes = await Promise.all(
-      Array.from({ length: 4 }, () =>
-        (async () => publishExperimentResult({ localRoot, artifactRoot, ...candidate() }))(),
-      ),
-    );
-    const digests = new Set(outcomes.map((item) => item.result.resultDigest));
-    assert.equal(digests.size, 1);
-    assert.equal(outcomes.filter((item) => !item.replayed).length >= 1, true);
-    const manifests = readdirSync(localRoot).filter((name) => name.endsWith('.json'));
-    assert.equal(manifests.length, 1);
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
-});
+    const parent = publishExperimentResult({ localRoot, artifactRoot, ...candidate() });
+    const evidence = expectedArtifact(parent.result, localRoot);
+    const closure = loadParentClosure({ localRoot, artifactRoot, expectedArtifact: evidence });
+    assert.equal(sha256Hex(closure.patchBytes), evidence.patchSha256);
 
-function committedParent({ localRoot, artifactRoot }) {
-  return publishExperimentResult({ localRoot, artifactRoot, ...candidate() });
-}
-
-test('parent closure requires exact bytes and refuses symlinked pathnames', () => {
-  const { base, localRoot, artifactRoot } = tempRoots();
-  try {
-    const parent = committedParent({ localRoot, artifactRoot });
-    const parentId = parent.result.id;
-    const closure = loadParentClosure({ localRoot, artifactRoot, parentId });
-    assert.equal(closure.binding.experimentId, parentId);
-    assert.equal(closure.binding.patchSha256, parent.result.artifact.patchSha256);
-    assert.equal(sha256Hex(closure.patchBytes), parent.result.artifact.patchSha256);
-
-    // Pathname swap: replacing the patch with a symlink must be refused
-    // before any bytes are read (O_NOFOLLOW), not silently followed.
-    const patchPath = path.join(localRoot, `${parentId}.patch`);
+    const patchPath = path.join(localRoot, `${parent.result.id}.patch`);
     const lure = path.join(base, 'lure.patch');
     writeFileSync(lure, 'diff --git a b\n+swapped\n');
     rmSync(patchPath);
     symlinkSync(lure, patchPath);
     assert.throws(
-      () => loadParentClosure({ localRoot, artifactRoot, parentId }),
+      () => loadParentClosure({ localRoot, artifactRoot, expectedArtifact: evidence }),
+      (error) => error.code === 'parent_unverifiable',
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('input envelope requires one canonical no-duplicate-key byte representation', () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'worker-envelope-'));
+  try {
+    const root = path.join(base, 'root');
+    mkdirSync(root);
+    const inputPath = path.join(root, 'input.json');
+    const canonical = `${canonicalJson(golden.input)}\n`;
+    writeFileSync(inputPath, canonical);
+    assert.deepEqual(loadWorkerInputEnvelope({
+      inputPath,
+      expectedInputDigest: golden.input.inputDigest,
+    }), golden.input);
+    assert.throws(() => loadWorkerInputEnvelope({
+      inputPath,
+      expectedInputDigest: `sha256:${'0'.repeat(64)}`,
+    }), /expected digest/);
+
+    writeFileSync(inputPath, `${JSON.stringify(golden.input)}\n`);
+    assert.throws(
+      () => loadWorkerInputEnvelope({ inputPath, expectedInputDigest: golden.input.inputDigest }),
+      /non-canonical or ambiguous/,
+    );
+    writeFileSync(inputPath, canonical.replace('{', '{"schema":"forged",'));
+    assert.throws(
+      () => loadWorkerInputEnvelope({ inputPath, expectedInputDigest: golden.input.inputDigest }),
+      /non-canonical or ambiguous/,
+    );
+
+    writeFileSync(inputPath, canonical);
+
+    const nested = path.join(root, 'nested');
+    const real = path.join(root, 'real');
+    mkdirSync(real);
+    writeFileSync(path.join(real, 'input.json'), '{}');
+    symlinkSync(real, nested, 'dir');
+    assert.throws(
+      () => readFileExact(path.join(nested, 'input.json'), 'symlinked envelope', { trustedRoot: root }),
       (error) => error.code === 'parent_unverifiable',
     );
 
-    // Restored regular file with WRONG bytes: closure mismatch, typed.
-    rmSync(patchPath);
-    writeFileSync(patchPath, 'diff --git a b\n+swapped\n');
     assert.throws(
-      () => loadParentClosure({ localRoot, artifactRoot, parentId }),
-      (error) => error.code === 'parent_closure_mismatch',
+      () => readFileExact(inputPath, 'swapped envelope', {
+        trustedRoot: root,
+        afterRead: ({ file }) => {
+          const replacement = path.join(root, 'replacement.json');
+          writeFileSync(replacement, `${JSON.stringify(golden.input)}\n`);
+          renameSync(replacement, file);
+        },
+      }),
+      (error) => error.code === 'parent_changed',
     );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
 
-    // Legacy manifests without the typed schema cannot anchor a tuning pass.
-    const legacyId = 'legacy-parent-000001';
-    writeFileSync(path.join(localRoot, `${legacyId}.json`), JSON.stringify({ id: legacyId }));
-    writeFileSync(path.join(localRoot, `${legacyId}.patch`), 'diff');
-    assert.throws(
-      () => loadParentClosure({ localRoot, artifactRoot, parentId: legacyId }),
-      (error) => error.code === 'legacy_parent_unverifiable',
-    );
+test('real interprocess race commits one immutable candidate', async () => {
+  const { base, localRoot, artifactRoot } = tempRoots();
+  const script = path.join(base, 'publish-once.mjs');
+  writeFileSync(script, [
+    `import { publishExperimentResult } from ${JSON.stringify(path.join(here, '..', 'worker', 'publish-local.mjs'))};`,
+    'const payload = JSON.parse(process.argv[2]);',
+    'const outcome = publishExperimentResult({',
+    '  localRoot: payload.localRoot, artifactRoot: payload.artifactRoot,',
+    '  input: payload.input, fields: payload.fields, html: payload.html,',
+    '  coverPng: Buffer.from(payload.cover), patch: payload.patch,',
+    '});',
+    'console.log(JSON.stringify({ digest: outcome.result.resultDigest, replayed: outcome.replayed }));',
+  ].join('\n'));
+  try {
+    const item = candidate();
+    const payload = {
+      localRoot,
+      artifactRoot,
+      input: item.input,
+      fields: item.fields,
+      html: item.html,
+      cover: [...item.coverPng],
+      patch: item.patch,
+    };
+    const { spawn } = await import('node:child_process');
+    const runs = await Promise.all(Array.from({ length: 3 }, () => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [script, JSON.stringify(payload)], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('close', (code) => (code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr))));
+    })));
+    assert.equal(new Set(runs.map((item) => item.digest)).size, 1);
+    assert.equal(readdirSync(localRoot).filter((name) => name.endsWith('.json')).length, 1);
+    assert.equal(readdirSync(localRoot).filter((name) => name.startsWith('.staging-')).length, 0);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -176,99 +240,40 @@ function runWorker(argv) {
   });
 }
 
-test('interprocess: concurrent worker publications commit one immutable candidate', async () => {
-  const { base, localRoot, artifactRoot } = tempRoots();
-  const script = path.join(base, 'publish-once.mjs');
-  writeFileSync(script, [
-    `import { publishExperimentResult } from ${JSON.stringify(path.join(here, '..', 'worker', 'publish-local.mjs'))};`,
-    'const payload = JSON.parse(process.argv[2]);',
-    'const outcome = publishExperimentResult({',
-    '  localRoot: payload.localRoot,',
-    '  artifactRoot: payload.artifactRoot,',
-    '  fields: payload.fields,',
-    '  html: payload.html,',
-    '  coverPng: Buffer.from(payload.cover),',
-    '  patch: payload.patch,',
-    '});',
-    'console.log(JSON.stringify({ digest: outcome.result.resultDigest, replayed: outcome.replayed }));',
-  ].join('\n'));
+test('command emits bound typed ERROR on stdout accepted by the generator parser', () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'worker-command-'));
+  const repoLocal = path.join(here, '..', '.local-experiments');
+  const before = existsSync(repoLocal) ? readdirSync(repoLocal).sort() : null;
   try {
-    const payload = {
-      localRoot,
-      artifactRoot,
-      fields: candidate().fields,
-      html: '<html data-race="1"/>',
-      cover: [9, 9, 9],
-      patch: 'diff --git a b\n+race\n',
-    };
-    const { spawn } = await import('node:child_process');
-    const runs = await Promise.all(
-      Array.from({ length: 3 }, () => new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, [script, JSON.stringify(payload)], { stdio: ['ignore', 'pipe', 'pipe'] });
-        let stdout = '', stderr = '';
-        child.stdout.on('data', (chunk) => { stdout += chunk; });
-        child.stderr.on('data', (chunk) => { stderr += chunk; });
-        child.on('close', (code) => (code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr))));
-      })),
-    );
-    const digests = new Set(runs.map((item) => item.digest));
-    assert.equal(digests.size, 1, 'every process must observe the same immutable candidate');
-    const manifests = readdirSync(localRoot).filter((name) => name.endsWith('.json'));
-    assert.equal(manifests.length, 1);
-    assert.equal(
-      readdirSync(localRoot).filter((name) => name.startsWith('.staging-')).length,
-      0,
-      'no staging directory may survive the race',
-    );
+    const inputPath = path.join(base, 'input.json');
+    writeFileSync(inputPath, `${canonicalJson(golden.input)}\n`);
+    const result = runWorker([
+      '--input-envelope', inputPath,
+      '--input-digest', golden.input.inputDigest,
+    ]);
+    assert.equal(result.status, 1);
+    const line = result.stdout.split('\n').find((item) => item.startsWith('ERROR '));
+    const failure = JSON.parse(line.slice('ERROR '.length));
+    assert.deepEqual(verifyWorkerFailure(failure, golden.input), failure);
+    assert.equal(line, `ERROR ${JSON.stringify(failure)}`);
+    assert.equal(failure.code, 'parent_unverifiable');
+    assert.deepEqual(parseExperimentWorkerTerminal({
+      stdout: result.stdout,
+      exitCode: result.status,
+      input: golden.input,
+    }), { kind: 'failure', value: failure });
+    assert.ok(!/\n\s+at /.test(result.stderr));
+
+    const foreign = runWorker([
+      '--input-envelope', inputPath,
+      '--input-digest', golden.input.inputDigest,
+      '--provider', 'codex',
+    ]);
+    assert.equal(foreign.status, 1);
+    assert.match(foreign.stdout, /parallel CLI authority is forbidden/);
+    const after = existsSync(repoLocal) ? readdirSync(repoLocal).sort() : null;
+    assert.deepEqual(after, before);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
-});
-
-test('command level: invalid feedback is a typed single-line ERROR with exit 1', () => {
-  const result = runWorker([
-    '--provider', 'claude',
-    '--parent', 'wild-sort-0123456789',
-    '--feedback', '  padded  ',
-  ]);
-  assert.equal(result.status, 1);
-  const line = result.stderr.split('\n').find((item) => item.startsWith('ERROR '));
-  assert.ok(line, `expected a typed ERROR line, got: ${result.stderr.slice(0, 400)}`);
-  const failure = JSON.parse(line.slice('ERROR '.length));
-  assert.equal(failure.schema, 'ugc.experiment-worker-failure.v1');
-  assert.equal(failure.code, 'invalid_feedback');
-  assert.ok(!/\n\s+at /.test(result.stderr), 'stderr must not carry a stack trace');
-});
-
-test('command level: control characters and oversized feedback are refused', () => {
-  for (const feedback of ['line\nbreak', 'x'.repeat(2001)]) {
-    const result = runWorker([
-      '--provider', 'claude',
-      '--parent', 'wild-sort-0123456789',
-      '--feedback', feedback,
-    ]);
-    assert.equal(result.status, 1);
-    const line = result.stderr.split('\n').find((item) => item.startsWith('ERROR '));
-    assert.ok(line);
-    assert.equal(JSON.parse(line.slice('ERROR '.length)).code, 'invalid_feedback');
-  }
-});
-
-test('command level: an unverifiable parent leaves zero created artifacts', () => {
-  const repoRoot = path.join(here, '..');
-  const localRoot = path.join(repoRoot, '.local-experiments');
-  const before = existsSync(localRoot) ? readdirSync(localRoot).sort() : null;
-  const result = runWorker([
-    '--provider', 'claude',
-    '--parent', 'missing-parent-000000',
-    '--feedback', 'legitimate tuning instruction',
-    '--attempt-uid', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
-  ]);
-  assert.equal(result.status, 1);
-  const line = result.stderr.split('\n').find((item) => item.startsWith('ERROR '));
-  assert.ok(line);
-  const failure = JSON.parse(line.slice('ERROR '.length));
-  assert.equal(failure.code, 'parent_unverifiable');
-  const after = existsSync(localRoot) ? readdirSync(localRoot).sort() : null;
-  assert.deepEqual(after, before, 'a refused run must not create artifacts');
 });

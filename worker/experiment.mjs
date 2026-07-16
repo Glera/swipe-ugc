@@ -6,8 +6,8 @@
  * clone pinned to an exact commit/tree. The release checkout and its refs are
  * never writable by the agent. This process validates the diff, type-checks new
  * diagnostics, builds with the known toolchain, injects a network-deny CSP, and
- * runs browser conformance. An unproven win may remain local, but publication
- * always repeats a strict autoplay WIN gate.
+ * runs browser conformance. Incomplete or unproven evidence is a typed,
+ * non-zero failure; publication repeats the strict autoplay WIN gate.
  */
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
@@ -35,11 +35,13 @@ import { modelInvocationArgs, normaliseModelInvocation } from './model-invocatio
 import {
   assertCompleteEvidence,
   buildWorkerFailure,
-  contractError,
-  validateAttemptUid,
-  validateExperimentFeedback,
+  sanitiseModelEvidence,
 } from './result-contract.mjs';
-import { loadParentClosure, publishExperimentResult } from './publish-local.mjs';
+import {
+  loadParentClosure,
+  loadWorkerInputEnvelope,
+  publishExperimentResult,
+} from './publish-local.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -57,10 +59,7 @@ const AGENT_HEARTBEAT_MS = Math.max(60, Number(process.env.UGC_EXPERIMENT_HEARTB
 const TEST_TIMEOUT_MS = Math.max(30, Number(process.env.UGC_EXPERIMENT_TEST_TIMEOUT_SEC || 150)) * 1000;
 const IDLE_TEST_MS = Math.max(5, Number(process.env.UGC_EXPERIMENT_IDLE_SEC || 30)) * 1000;
 const MIN_WIN_MS = Math.max(2, Number(process.env.UGC_EXPERIMENT_MIN_WIN_SEC || 3)) * 1000;
-const TEST_SEED = Number(process.env.UGC_EXPERIMENT_TEST_SEED || 0x5eed1234) >>> 0;
-const DEFAULT_CLAUDE_MODEL = process.env.ISLAND_EXPERIMENT_MODEL || 'sonnet';
-const DEFAULT_CODEX_MODEL = String(process.env.CODEX_EXPERIMENT_MODEL || 'gpt-5.6-sol').trim();
-const REQUESTED_EFFORT = String(process.env.CODEX_EXPERIMENT_EFFORT || process.env.ISLAND_EXPERIMENT_EFFORT || '');
+let TEST_SEED = 0;
 const experimentStartedAt = Date.now();
 
 function subscriptionCliEnv(provider) {
@@ -74,27 +73,22 @@ function subscriptionCliEnv(provider) {
 
 const args = {};
 for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];
-const prompt = String(args.prompt || '').trim().slice(0, 500);
-const parentId = String(args.parent || '').trim();
-const provider = args.provider === 'codex' ? 'codex' : 'claude';
-const requestedModel = String(args.model || '').trim();
-const selectedModel = requestedModel || (provider === 'codex' ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL);
-const baselineId = String(args.baseline || 'sort-v2').trim();
-const baseline = baselineCatalog.baselines?.[baselineId];
-// Everything that can reject operator input is validated INSIDE the typed
-// error boundary (the main try below), so a bad argument always leaves as a
-// single-line typed ERROR with exit 1 — never a raw stack trace. These are
-// assigned there before any other work.
+const inputEnvelopePath = String(args['input-envelope'] || '');
+const expectedInputDigest = String(args['input-digest'] || '');
+let workerInput = null;
+let prompt = '';
+let parentId = '';
+let provider = '';
+let selectedModel = '';
+let baselineId = '';
+let baseline = null;
 let feedback = '';
 let invocation = null;
 let EFFORT = '';
-let attemptUid = null;
-let concept;
-try { concept = JSON.parse(String(args.concept || '{}')); } catch { concept = {}; }
-const title = String(concept.title || 'Wild sort experiment').trim().slice(0, 60);
-const pitch = String(concept.pitch || concept.summary || '').trim().slice(0, 500);
-const mechanic = String(concept.mechanic || '').trim().slice(0, 500);
-const feeling = String(concept.feeling || '').trim().slice(0, 240);
+let title = '';
+let pitch = '';
+let mechanic = '';
+let feeling = '';
 
 function status(phase, message, attempt = 0, details = {}) {
   console.log(`STATUS ${JSON.stringify({ phase, message, attempt, ...details })}`);
@@ -176,7 +170,7 @@ async function validateDiff(worktree, baseCommit) {
     code: line.slice(0, 2),
     file: line.slice(3).split(' -> ').pop(),
   })).filter((entry) => entry.file !== 'node_modules'); // trusted dependency symlink created above
-  const allChanged = [...new Set(entries.map((entry) => entry.file))];
+  const allChanged = [...new Set(entries.map((entry) => entry.file))].sort();
   if (!allChanged.length) fail('agent made no code changes');
   for (const file of allChanged) {
     if (!/^marble-sort-swipe\/src\/[A-Za-z0-9._/-]+\.ts$/.test(file) || file.includes('..')) {
@@ -217,9 +211,7 @@ async function validateDiff(worktree, baseCommit) {
 function agentPrompt() {
   // One job carries exactly one physical model invocation: there is no
   // internal repair round, so there is no failure transcript to embed.
-  const lineage = parentId
-    ? `This is a tuning pass over experiment ${parentId}. Player feedback: ${feedback}.`
-    : 'This is the first implementation of the selected concept.';
+  const lineage = `This is a tuning pass over experiment ${parentId}. Player feedback: ${feedback}.`;
   const toolBoundary = provider === 'claude'
     ? 'You have scoped Read/Edit only.'
     : 'You are inside a disposable workspace-write sandbox. The outer worker rejects every path outside marble-sort-swipe/src and runs build/autoplay itself.';
@@ -571,31 +563,19 @@ async function autoplayWithFlakeRetry(html, attempt, onRun) {
   }
 }
 
-function publishCandidate({ patch, files, baseCommit, agentSummary, html, coverPng, parentBinding, metrics }) {
-  const digest = createHash('sha1').update(baseCommit).update('\0').update(patch).digest('hex').slice(0, 10);
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'wild-sort';
-  // The candidate id is immutable: content-addressed, and additionally bound
-  // to the FULL untruncated attempt UUID when one is supplied, so two runs
-  // can never share one mutable id and the binding survives verbatim.
-  const id = attemptUid ? `${slug}-${digest}-${attemptUid}` : `${slug}-${digest}`;
+function publishCandidate({ patch, files, agentSummary, html, coverPng, metrics }) {
   assertHardenedExperimentHtml(html);
   return publishExperimentResult({
     localRoot,
     artifactRoot,
+    input: workerInput,
     html,
     coverPng,
     patch,
     fields: {
-      id,
-      attemptUid,
-      parent: parentBinding,
-      baselineId,
-      provider,
-      baseCommit,
       title,
       concept: {
         prompt,
-        feedback: feedback || null,
         pitch,
         mechanic,
         feeling,
@@ -606,14 +586,9 @@ function publishCandidate({ patch, files, baseCommit, agentSummary, html, coverP
       playtestRuns: metrics.playtestRuns,
       conformance: metrics.conformance,
       autoplay: metrics.autoplay,
-      model: selectedModel,
-      effort: EFFORT,
-      testSeed: TEST_SEED,
       files,
       agentSummary,
       createdAt: new Date().toISOString(),
-      url: `/ugc/u/local-experiments/${id}.html`,
-      coverUrl: `/ugc/u/local-experiments/${id}.cover.png`,
       coverBytes: coverPng.length,
     },
   });
@@ -621,20 +596,28 @@ function publishCandidate({ patch, files, baseCommit, agentSummary, html, coverP
 
 let worktree = '';
 try {
-  // Typed error boundary for operator input: the exact request domain is
-  // enforced here so every rejection is a single-line typed ERROR, exit 1.
-  if (parentId && !/^[a-z0-9-]{8,80}$/.test(parentId)) {
-    throw contractError('invalid_parent', 'parent experiment id is invalid');
+  const allowedArgs = new Set(['input-digest', 'input-envelope']);
+  const foreignArg = Object.keys(args).find((key) => !allowedArgs.has(key));
+  if (foreignArg) {
+    const error = new Error(`parallel CLI authority is forbidden: --${foreignArg}`);
+    error.code = 'experiment_worker_input_invalid';
+    throw error;
   }
-  feedback = validateExperimentFeedback(args.feedback, { required: Boolean(parentId) });
-  invocation = normaliseModelInvocation({ provider, model: selectedModel, effort: REQUESTED_EFFORT });
+  workerInput = loadWorkerInputEnvelope({ inputPath: inputEnvelopePath, expectedInputDigest });
+  prompt = 'Implement the exact reviewed tuning goal.';
+  parentId = workerInput.parent.targetId;
+  provider = workerInput.model.provider;
+  selectedModel = workerInput.model.argument;
+  baselineId = workerInput.baseline.id;
+  baseline = baselineCatalog.baselines?.[baselineId];
+  feedback = workerInput.request.instruction;
+  TEST_SEED = workerInput.worker.testSeed;
+  invocation = normaliseModelInvocation({
+    provider,
+    model: selectedModel,
+    effort: workerInput.model.effort,
+  });
   EFFORT = invocation.effort;
-  // A rework run must carry the durable generator attempt UUID so the
-  // candidate id is bound to exactly one immutable attempt/job.
-  attemptUid = validateAttemptUid(
-    args['attempt-uid'] === undefined ? null : String(args['attempt-uid']),
-    { required: Boolean(parentId) },
-  );
   if (!baseline || baseline.template !== 'sort' || baseline.releasePlayable !== false) {
     fail(`unknown or unsafe generator baseline: ${baselineId}`);
   }
@@ -642,22 +625,26 @@ try {
   // Parent closure is captured exactly once with hardened no-follow reads:
   // manifest is a verified typed result, patch/html/cover bytes replay its
   // artifact identity, and only the captured patch bytes are ever applied.
-  const parent = parentId
-    ? loadParentClosure({ localRoot, artifactRoot, parentId })
-    : null;
-  const baseCommit = String(baseline.sourceCommit);
+  const parent = loadParentClosure({
+    localRoot,
+    artifactRoot,
+    expectedArtifact: workerInput.parent.evidence.parentArtifact,
+  });
+  title = String(parent.manifest.title || 'Reworked sort experiment');
+  pitch = String(parent.manifest.concept?.pitch || 'Apply the reviewed tuning without changing lineage.');
+  mechanic = String(parent.manifest.concept?.mechanic || 'Preserve the parent rule and improve its legibility.');
+  feeling = String(parent.manifest.concept?.feeling || 'A clearer version of the reviewed payoff.');
+  const baseCommit = workerInput.baseline.sourceCommit;
   const actualCommit = (await runChecked('git', ['rev-parse', `${baseCommit}^{commit}`], { cwd: playablesRoot })).trim();
   const actualTree = (await runChecked('git', ['rev-parse', `${baseCommit}:${baseline.sourcePath}`], { cwd: playablesRoot })).trim();
-  if (actualCommit !== baseCommit || actualTree !== baseline.sourceTree) {
+  if (baseline.sourceCommit !== workerInput.baseline.sourceCommit
+    || baseline.sourceTree !== workerInput.baseline.sourceTree
+    || actualCommit !== baseCommit || actualTree !== workerInput.baseline.sourceTree) {
     fail(`generator baseline ${baselineId} failed its immutable commit/tree lock`);
-  }
-  if (parent) {
-    const parentBaseline = parent.manifest.baselineId;
-    if (parentBaseline !== baselineId) fail('parent experiment belongs to a different generator baseline');
   }
   worktree = mkdtempSync(path.join(tmpdir(), 'swipe-wild-sort-'));
   rmSync(worktree, { recursive: true, force: true });
-  status('fork', parent ? 'Restoring the parent experiment in an isolated fork' : 'Creating an isolated mechanic fork');
+  status('fork', 'Restoring the exact reviewed parent experiment in an isolated fork');
   await runChecked('git', ['clone', '--shared', '--no-checkout', playablesRoot, worktree], { cwd: workspace, timeoutMs: 60000 });
   await runChecked('git', ['checkout', '--detach', baseCommit], { cwd: worktree, timeoutMs: 60000 });
   const cloneHead = (await runChecked('git', ['rev-parse', 'HEAD'], { cwd: worktree })).trim();
@@ -665,14 +652,12 @@ try {
   const dependencies = path.join(playablesRoot, 'node_modules');
   if (!existsSync(dependencies)) fail('playables/node_modules is missing; run npm ci before starting the local lab');
   symlinkSync(dependencies, path.join(worktree, 'node_modules'), 'dir');
-  if (parent) {
-    // Apply ONLY the captured closure bytes from a path this process owns —
-    // the parent pathname is never re-opened after verification.
-    const capturedPatch = path.join(worktree, '.parent-closure.patch');
-    writeFileSync(capturedPatch, parent.patchBytes);
-    await runChecked('git', ['apply', '--whitespace=nowarn', capturedPatch], { cwd: worktree });
-    rmSync(capturedPatch, { force: true });
-  }
+  // Apply ONLY the captured closure bytes from a path this process owns —
+  // the parent pathname is never re-opened after verification.
+  const capturedPatch = path.join(worktree, '.parent-closure.patch');
+  writeFileSync(capturedPatch, parent.patchBytes);
+  await runChecked('git', ['apply', '--whitespace=nowarn', capturedPatch], { cwd: worktree });
+  rmSync(capturedPatch, { force: true });
   status('typecheck-baseline', 'Recording pre-existing diagnostics so only new errors consume the experiment budget');
   const baselineDiagnostics = new Set((await collectTypeDiagnostics(worktree)).map(normalizeDiagnostic));
 
@@ -686,7 +671,7 @@ try {
   const agentSummary = await invokeAgent(worktree, Math.min(AGENT_TIMEOUT_MS, remainingMs));
   status('safety', 'Checking the code sandbox and patch budget', 1);
   const validated = await validateDiff(worktree, baseCommit);
-  if (parent && validated.patch === parent.patchBytes.toString('utf8')) {
+  if (validated.patch === parent.patchBytes.toString('utf8')) {
     const unchanged = new Error('TUNING FAILED: the agent did not change the parent experiment');
     unchanged.code = 'tuning_unchanged';
     throw unchanged;
@@ -717,11 +702,9 @@ try {
   const published = publishCandidate({
     patch: validated.patch,
     files: validated.files,
-    baseCommit,
     agentSummary,
     html: artifactHtml,
     coverPng: conformanceResult.coverPng,
-    parentBinding: parent ? parent.binding : null,
     metrics: {
       agentInvocations: 1,
       playtestRuns,
@@ -734,13 +717,15 @@ try {
   }
   console.log(`RESULT ${JSON.stringify(published.result)}`);
 } catch (error) {
-  const failure = buildWorkerFailure({
-    code: typeof error?.code === 'string' ? error.code : 'worker_failed',
-    message: error instanceof Error ? error.message : String(error),
-    provider,
-    model: selectedModel,
-  });
-  console.error(`ERROR ${JSON.stringify(failure)}`);
+  const code = typeof error?.code === 'string' ? error.code : 'worker_failed';
+  const message = error instanceof Error ? error.message : String(error);
+  const failure = workerInput
+    ? buildWorkerFailure({ input: workerInput, code, message })
+    : {
+        code: 'experiment_worker_input_invalid',
+        message: sanitiseModelEvidence(message, 2000),
+      };
+  console.log(`ERROR ${JSON.stringify(failure)}`);
   process.exitCode = 1;
 } finally {
   if (worktree) rmSync(worktree, { recursive: true, force: true });

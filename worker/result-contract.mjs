@@ -1,143 +1,477 @@
-// Exact experiment-worker result contract (conformance slice, fix round 2).
-//
-// One physical model invocation = one job = one worker process = at most one
-// typed RESULT. The worker never publishes success without a proven autoplay
-// win and complete evidence; every success carries parent binding, artifact
-// identity and a deterministic self-digest. `verifyWorkerResult` re-validates
-// the COMPLETE domain, so a re-signed forged document (valid digest over
-// invalid claims) is rejected exactly like a tampered one.
-import { createHash } from 'crypto';
+// Independent worker-side mirror of the frozen experiment worker wire.
+// The canonical source is the generator-owned cross-repo golden fixture;
+// tests read that file directly, so this implementation cannot drift behind
+// a copied fixture inside swipe-ugc.
+import { createHash } from 'node:crypto';
 
+export const EXPERIMENT_WORKER_INPUT_SCHEMA = 'lab.experiment-worker-input.v1';
 export const WORKER_RESULT_SCHEMA = 'ugc.experiment-worker-result.v1';
 export const WORKER_FAILURE_SCHEMA = 'ugc.experiment-worker-failure.v1';
 export const FEEDBACK_MIN = 1;
 export const FEEDBACK_MAX = 2000;
 export const FEEDBACK_MAX_BYTES = 8000;
 
-const HEX64 = /^[a-f0-9]{64}$/;
-const HEX40 = /^[a-f0-9]{40}$/;
-const EXPERIMENT_ID = /^[a-z0-9-]{8,80}$/;
-const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const SOURCE_FILE = /^marble-sort-swipe\/src\/[A-Za-z0-9._/-]+\.ts$/;
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const TARGET = /^[a-z0-9-]{8,80}$/;
+const PROFILE = /^[a-z0-9][a-z0-9._-]{2,79}$/;
+const EFFORT = /^[a-z][a-z0-9_-]{0,31}$/;
+const GIT_OBJECT = /^[a-f0-9]{40}$/;
+const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const BARE_DIGEST = /^[a-f0-9]{64}$/;
+const CONTROL = /[\u0000-\u001f\u007f]/;
+const SOURCE = /^marble-sort-swipe\/src\/[A-Za-z0-9_./-]+\.ts$/;
 const ISO_MILLIS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
+const INPUT_KEYS = ['attempt', 'baseline', 'inputDigest', 'model', 'parent', 'request', 'schema', 'worker'];
+const REQUEST_KEYS = ['id', 'instruction', 'requestHash', 'requestedEffort', 'requestedModelProfileId'];
+const ATTEMPT_KEYS = ['id', 'jobId', 'modelExecutionReceiptId', 'ordinal'];
+const MODEL_KEYS = ['argument', 'effort', 'profileDigest', 'profileId', 'provider'];
+const PARENT_KEYS = ['evidence', 'reviewId', 'targetId'];
+const BASELINE_KEYS = ['id', 'sourceCommit', 'sourceTree'];
+const WORKER_KEYS = ['contractDigest', 'gateVersion', 'testSeed'];
+const EVIDENCE_KEYS = ['parentArtifact', 'parentArtifactDigest', 'parentReviewDigest', 'schema'];
+const PARENT_ARTIFACT_KEYS = [
+  'baseCommit', 'baselineId', 'baselineTree', 'coverSha256', 'experimentId',
+  'htmlSha256', 'manifestSha256', 'patchSha256', 'schema',
+];
+const RESULT_KEYS = [
+  'agentInvocations', 'agentSummary', 'artifact', 'attemptUid', 'autoplay',
+  'autoplayPassed', 'baseCommit', 'baselineId', 'baselineTree', 'concept',
+  'conformance', 'coverBytes', 'coverUrl', 'createdAt', 'effort', 'files',
+  'gateVersion', 'id', 'inputDigest', 'jobId', 'model',
+  'modelExecutionReceiptId', 'parent', 'playtestRuns', 'provider', 'requestId',
+  'resultDigest', 'schema', 'testSeed', 'title', 'url', 'wallTimeMs',
+  'workerContractDigest',
+];
+const RESULT_PARENT_KEYS = ['experimentId', 'parentArtifactDigest', 'parentReviewDigest'];
+const ARTIFACT_KEYS = ['baseCommit', 'baselineId', 'baselineTree', 'coverSha256', 'htmlSha256', 'patchSha256'];
+const CONCEPT_KEYS = ['feedback', 'feeling', 'mechanic', 'pitch', 'prompt'];
+const CONFORMANCE_KEYS = ['idleMs', 'rafFrames'];
+const AUTOPLAY_KEYS = ['durationMs', 'rafFrames', 'runNumber', 'visualStates'];
+const FAILURE_KEYS = [
+  'attemptUid', 'code', 'failureDigest', 'inputDigest', 'jobId', 'message',
+  'model', 'modelExecutionReceiptId', 'provider', 'requestId', 'schema',
+];
+const RUNTIME_RESULT_KEYS = [
+  'agentInvocations', 'agentSummary', 'artifact', 'autoplay', 'autoplayPassed',
+  'concept', 'conformance', 'coverBytes', 'createdAt', 'files', 'playtestRuns',
+  'title', 'wallTimeMs',
+];
+
 export function contractError(code, message) {
-  const error = new Error(message);
+  const error = new Error(String(message).replace(/\s+/g, ' ').trim().slice(0, 2000));
   error.code = code;
   return error;
 }
 
 export function canonicalJson(value) {
   if (value === null) return 'null';
-  const kind = typeof value;
-  if (kind === 'string') return JSON.stringify(value);
-  if (kind === 'boolean') return value ? 'true' : 'false';
-  if (kind === 'number') {
-    if (!Number.isFinite(value)) throw contractError('non_finite_number', 'result numbers must be finite');
+  if (value === true) return 'true';
+  if (value === false) return 'false';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw contractError('non_finite_number', 'canonical JSON cannot contain a non-finite number');
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
-  if (kind === 'object') {
+  if (value && typeof value === 'object') {
     const keys = Object.keys(value).sort();
-    return `{${keys
-      .map((key) => {
-        if (value[key] === undefined) throw contractError('undefined_field', `field ${key} is undefined`);
-        return `${JSON.stringify(key)}:${canonicalJson(value[key])}`;
-      })
-      .join(',')}}`;
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
   }
-  throw contractError('unsupported_value', `cannot canonicalize a ${kind}`);
+  throw contractError('unsupported_value', 'canonical JSON can contain JSON values only');
 }
 
 export function sha256Hex(value) {
-  return createHash('sha256').update(value).digest('hex');
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
 export function digestOf(value) {
   return sha256Hex(canonicalJson(value));
 }
 
-export function exactKeys(value, allowed, label) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw contractError('invalid_shape', `${label} must be an object`);
+export function exactKeys(value, expected, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expected)) {
+    throw contractError('experiment_worker_contract_invalid', `${label} has invalid exact keys`);
   }
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length) throw contractError('unknown_field', `${label} contains unknown field ${extra[0]}`);
-  const missing = allowed.filter((key) => value[key] === undefined);
-  if (missing.length) throw contractError('missing_field', `${label} is missing ${missing[0]}`);
   return value;
 }
 
-// Feedback mirrors the generator's rework-instruction domain exactly:
-// printable (no control characters), no leading/trailing whitespace,
-// 1..2000 characters and at most 8000 utf-8 bytes. The worker never trims,
-// truncates or otherwise rewrites it.
-export function validateExperimentFeedback(raw, { required = false } = {}) {
-  if (raw === undefined || raw === null || raw === '') {
-    if (required) throw contractError('invalid_feedback', 'feedback is required for a tuning pass');
-    return '';
-  }
-  if (typeof raw !== 'string') throw contractError('invalid_feedback', 'feedback must be a string');
-  if (raw.length < FEEDBACK_MIN || raw.length > FEEDBACK_MAX) {
-    throw contractError(
-      'invalid_feedback',
-      `feedback must contain ${FEEDBACK_MIN}..${FEEDBACK_MAX} characters, got ${raw.length}`,
-    );
-  }
-  if (Buffer.byteLength(raw, 'utf8') > FEEDBACK_MAX_BYTES) {
-    throw contractError('invalid_feedback', `feedback must fit ${FEEDBACK_MAX_BYTES} utf-8 bytes`);
-  }
-  if (CONTROL_CHARS.test(raw)) {
-    throw contractError('invalid_feedback', 'feedback cannot contain control characters');
-  }
-  if (raw !== raw.trim()) {
-    throw contractError('invalid_feedback', 'feedback cannot carry leading or trailing whitespace');
-  }
-  return raw;
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
 }
 
-const PARENT_KEYS = ['experimentId', 'patchSha256'];
-const ARTIFACT_KEYS = ['baseCommit', 'baselineId', 'coverSha256', 'htmlSha256', 'patchSha256'];
-const CONCEPT_KEYS = ['feedback', 'feeling', 'mechanic', 'pitch', 'prompt'];
+// The public definition is an immutable value snapshot, never an alias to the
+// verifier's private key tables. Consumers may safely retain it as evidence
+// without acquiring authority over validation behaviour.
+export const EXPERIMENT_WORKER_CONTRACT_DEFINITION = deepFreeze({
+  schema: 'lab.experiment-worker-contract.v1',
+  inputSchema: EXPERIMENT_WORKER_INPUT_SCHEMA,
+  resultSchema: WORKER_RESULT_SCHEMA,
+  failureSchema: WORKER_FAILURE_SCHEMA,
+  canonicalization: 'RFC8785-compatible-json.v1',
+  terminalJson: 'compact-JSON.stringify-no-duplicate-keys',
+  manifestJson: 'JSON.stringify-2space-newline-no-duplicate-keys',
+  digestFormat: 'sha256:<lowercase-hex>',
+  candidateId: 'rework-<canonical-attempt-uuid>-<patch-sha256-first-12-hex>',
+  keys: {
+    input: [...INPUT_KEYS],
+    request: [...REQUEST_KEYS],
+    attempt: [...ATTEMPT_KEYS],
+    model: [...MODEL_KEYS],
+    parent: [...PARENT_KEYS],
+    baseline: [...BASELINE_KEYS],
+    worker: [...WORKER_KEYS],
+    parentEvidence: [...EVIDENCE_KEYS],
+    result: [...RESULT_KEYS],
+    resultParent: [...RESULT_PARENT_KEYS],
+    artifact: [...ARTIFACT_KEYS],
+    concept: [...CONCEPT_KEYS],
+    conformance: [...CONFORMANCE_KEYS],
+    autoplay: [...AUTOPLAY_KEYS],
+    failure: [...FAILURE_KEYS],
+  },
+  bounds: {
+    instructionChars: [1, 2000],
+    instructionUtf8Bytes: 8000,
+    attemptOrdinal: [1, 10_000],
+    playtestRuns: [1, 2],
+    autoplayRunNumber: [1, 2],
+    autoplayVisualStatesMin: 2,
+    testSeed: [0, 0xffff_ffff],
+    files: [1, 200],
+  },
+  sourceFilePattern: SOURCE.source,
+  filesCanonicalOrder: 'unique-lexicographic-ascending',
+  redactionVersion: 'model-evidence-sanitizer.v2',
+  redactedFields: ['agentSummary', 'failure.message'],
+  testSeedBinding: 'input.worker.testSeed=result.testSeed',
+  evidenceRelations: ['playtestRuns=autoplay.runNumber'],
+});
 
-export function buildParentBinding(parent) {
-  if (parent === null) return null;
-  exactKeys(parent, PARENT_KEYS, 'parent binding');
-  if (!EXPERIMENT_ID.test(String(parent.experimentId))) {
-    throw contractError('invalid_parent', 'parent experimentId is invalid');
+export const EXPERIMENT_WORKER_CONTRACT_DIGEST = digestOf(
+  EXPERIMENT_WORKER_CONTRACT_DEFINITION,
+);
+
+function printable(value, label, { min = 1, max = 2000, maxBytes = 8000 } = {}) {
+  if (typeof value !== 'string' || value !== value.trim() || value.length < min || value.length > max
+    || Buffer.byteLength(value, 'utf8') > maxBytes || CONTROL.test(value)) {
+    throw contractError('experiment_worker_contract_invalid', `${label} is outside the printable contract`);
   }
-  if (!HEX64.test(String(parent.patchSha256))) {
-    throw contractError('invalid_parent', 'parent patchSha256 must be a 64-hex sha256');
-  }
-  return { experimentId: parent.experimentId, patchSha256: parent.patchSha256 };
+  return value;
 }
 
-export function buildArtifactIdentity(artifact) {
-  exactKeys(artifact, ARTIFACT_KEYS, 'artifact identity');
-  for (const key of ['coverSha256', 'htmlSha256', 'patchSha256']) {
-    if (!HEX64.test(String(artifact[key]))) {
-      throw contractError('invalid_artifact', `${key} must be a 64-hex sha256`);
-    }
+function count(value, label, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw contractError('experiment_worker_contract_invalid', `${label} is outside its integer bounds`);
   }
-  if (!HEX40.test(String(artifact.baseCommit))) {
-    throw contractError('invalid_artifact', 'baseCommit must be a 40-hex git commit');
+  return value;
+}
+
+export function validateExperimentFeedback(value, { required = true } = {}) {
+  if (!required && (value === undefined || value === null || value === '')) return '';
+  return printable(value, 'request instruction', {
+    min: FEEDBACK_MIN,
+    max: FEEDBACK_MAX,
+    maxBytes: FEEDBACK_MAX_BYTES,
+  });
+}
+
+function normaliseParentArtifact(raw) {
+  const value = structuredClone(raw);
+  exactKeys(value, PARENT_ARTIFACT_KEYS, 'parent artifact');
+  if (value.schema !== 'lab.experiment-artifact-identity.v1'
+    || !TARGET.test(String(value.experimentId || ''))
+    || !PROFILE.test(String(value.baselineId || ''))
+    || !GIT_OBJECT.test(String(value.baseCommit || ''))
+    || !GIT_OBJECT.test(String(value.baselineTree || ''))
+    || ['manifestSha256', 'patchSha256', 'htmlSha256', 'coverSha256']
+      .some((key) => !DIGEST.test(String(value[key] || '')))) {
+    throw contractError('experiment_worker_contract_invalid', 'parent artifact identity is invalid');
   }
-  if (!String(artifact.baselineId || '').trim()) {
-    throw contractError('invalid_artifact', 'baselineId is required');
+  return value;
+}
+
+function normaliseInputBody(raw) {
+  const value = structuredClone(raw);
+  exactKeys(value, INPUT_KEYS.filter((key) => key !== 'inputDigest'), 'worker input body');
+  if (value.schema !== EXPERIMENT_WORKER_INPUT_SCHEMA) {
+    throw contractError('experiment_worker_contract_invalid', 'worker input schema is invalid');
   }
-  return {
-    baseCommit: artifact.baseCommit,
-    baselineId: artifact.baselineId,
-    coverSha256: artifact.coverSha256,
-    htmlSha256: artifact.htmlSha256,
-    patchSha256: artifact.patchSha256,
+  exactKeys(value.request, REQUEST_KEYS, 'worker input request');
+  exactKeys(value.attempt, ATTEMPT_KEYS, 'worker input attempt');
+  exactKeys(value.model, MODEL_KEYS, 'worker input model');
+  exactKeys(value.parent, PARENT_KEYS, 'worker input parent');
+  exactKeys(value.baseline, BASELINE_KEYS, 'worker input baseline');
+  exactKeys(value.worker, WORKER_KEYS, 'worker input contract');
+  if (!UUID.test(String(value.request.id || '')) || !DIGEST.test(String(value.request.requestHash || ''))
+    || !PROFILE.test(String(value.request.requestedModelProfileId || ''))
+    || !EFFORT.test(String(value.request.requestedEffort || ''))) {
+    throw contractError('experiment_worker_contract_invalid', 'worker request identity is invalid');
+  }
+  value.request.instruction = validateExperimentFeedback(value.request.instruction);
+  if (!UUID.test(String(value.attempt.id || '')) || !UUID.test(String(value.attempt.jobId || ''))
+    || !UUID.test(String(value.attempt.modelExecutionReceiptId || ''))) {
+    throw contractError('experiment_worker_contract_invalid', 'worker attempt identity is invalid');
+  }
+  value.attempt.ordinal = count(value.attempt.ordinal, 'attempt ordinal', { min: 1, max: 10_000 });
+  if (!['codex', 'claude'].includes(value.model.provider)
+    || !PROFILE.test(String(value.model.profileId || ''))
+    || !printable(value.model.argument, 'model argument', { max: 80, maxBytes: 320 })
+    || !EFFORT.test(String(value.model.effort || ''))
+    || !BARE_DIGEST.test(String(value.model.profileDigest || ''))
+    || value.model.profileId !== value.request.requestedModelProfileId
+    || value.model.effort !== value.request.requestedEffort) {
+    throw contractError('experiment_worker_contract_invalid', 'worker model selection differs from request');
+  }
+  const evidence = structuredClone(value.parent.evidence);
+  exactKeys(evidence, EVIDENCE_KEYS, 'parent evidence');
+  evidence.parentArtifact = normaliseParentArtifact(evidence.parentArtifact);
+  if (evidence.schema !== 'lab.experiment-rework-parent.v1'
+    || !DIGEST.test(String(evidence.parentReviewDigest || ''))
+    || !DIGEST.test(String(evidence.parentArtifactDigest || ''))
+    || evidence.parentArtifactDigest !== digestOf(evidence.parentArtifact)) {
+    throw contractError('experiment_worker_contract_invalid', 'parent evidence identity is invalid');
+  }
+  value.parent.evidence = evidence;
+  if (!UUID.test(String(value.parent.reviewId || '')) || !TARGET.test(String(value.parent.targetId || ''))
+    || value.parent.targetId !== evidence.parentArtifact.experimentId) {
+    throw contractError('experiment_worker_contract_invalid', 'worker parent binding is invalid');
+  }
+  if (!PROFILE.test(String(value.baseline.id || ''))
+    || !GIT_OBJECT.test(String(value.baseline.sourceCommit || ''))
+    || !GIT_OBJECT.test(String(value.baseline.sourceTree || ''))
+    || value.baseline.id !== evidence.parentArtifact.baselineId
+    || value.baseline.sourceCommit !== evidence.parentArtifact.baseCommit
+    || value.baseline.sourceTree !== evidence.parentArtifact.baselineTree) {
+    throw contractError('experiment_worker_contract_invalid', 'worker baseline differs from parent evidence');
+  }
+  if (value.worker.contractDigest !== EXPERIMENT_WORKER_CONTRACT_DIGEST
+    || !DIGEST.test(String(value.worker.gateVersion || ''))) {
+    throw contractError('experiment_worker_contract_invalid', 'worker contract or gate version is invalid');
+  }
+  value.worker.testSeed = count(value.worker.testSeed, 'worker testSeed', { max: 0xffff_ffff });
+  return value;
+}
+
+export function verifyWorkerInput(raw) {
+  const value = structuredClone(raw);
+  exactKeys(value, INPUT_KEYS, 'worker input document');
+  const { inputDigest, ...body } = value;
+  const normalised = normaliseInputBody(body);
+  if (!DIGEST.test(String(inputDigest || '')) || inputDigest !== digestOf(normalised)) {
+    throw contractError('experiment_worker_input_digest_mismatch', 'worker input digest does not replay');
+  }
+  return Object.freeze({ ...normalised, inputDigest });
+}
+
+export function experimentCandidateId(input, patchSha256) {
+  const verified = verifyWorkerInput(input);
+  if (!DIGEST.test(String(patchSha256 || ''))) {
+    throw contractError('experiment_worker_contract_invalid', 'candidate patch digest is invalid');
+  }
+  return `rework-${verified.attempt.id}-${patchSha256.slice('sha256:'.length, 'sha256:'.length + 12)}`;
+}
+
+function validateMetrics(value, keys, label) {
+  exactKeys(value, keys, label);
+  if (label === 'conformance') {
+    count(value.idleMs, 'conformance.idleMs');
+    count(value.rafFrames, 'conformance.rafFrames', { min: 1 });
+  } else {
+    count(value.durationMs, 'autoplay.durationMs', { min: 1 });
+    count(value.rafFrames, 'autoplay.rafFrames', { min: 1 });
+    count(value.runNumber, 'autoplay.runNumber', { min: 1, max: 2 });
+    count(value.visualStates, 'autoplay.visualStates', { min: 2 });
+  }
+}
+
+function verifyBoundIdentity(value, input) {
+  if (value.inputDigest !== input.inputDigest || value.requestId !== input.request.id
+    || value.attemptUid !== input.attempt.id || value.jobId !== input.attempt.jobId
+    || value.modelExecutionReceiptId !== input.attempt.modelExecutionReceiptId
+    || value.provider !== input.model.provider || value.model !== input.model.argument) {
+    throw contractError('experiment_worker_binding_mismatch', 'worker output differs from immutable input');
+  }
+}
+
+export function verifyWorkerResult(raw, expectedInput) {
+  const input = verifyWorkerInput(expectedInput);
+  const value = structuredClone(raw);
+  exactKeys(value, RESULT_KEYS, 'worker RESULT');
+  if (value.schema !== WORKER_RESULT_SCHEMA || !DIGEST.test(String(value.resultDigest || ''))) {
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT identity is invalid');
+  }
+  const { resultDigest, ...body } = value;
+  if (resultDigest !== digestOf(body)) {
+    throw contractError('experiment_worker_result_digest_mismatch', 'worker RESULT digest does not replay');
+  }
+  verifyBoundIdentity(body, input);
+  if (body.autoplayPassed !== true || body.agentInvocations !== 1
+    || body.effort !== input.model.effort || body.workerContractDigest !== input.worker.contractDigest
+    || body.gateVersion !== input.worker.gateVersion || body.testSeed !== input.worker.testSeed
+    || body.baseCommit !== input.baseline.sourceCommit || body.baselineId !== input.baseline.id
+    || body.baselineTree !== input.baseline.sourceTree) {
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT contradicts proven execution');
+  }
+  exactKeys(body.parent, RESULT_PARENT_KEYS, 'worker RESULT parent');
+  if (body.parent.experimentId !== input.parent.targetId
+    || body.parent.parentArtifactDigest !== input.parent.evidence.parentArtifactDigest
+    || body.parent.parentReviewDigest !== input.parent.evidence.parentReviewDigest) {
+    throw contractError('experiment_worker_binding_mismatch', 'worker RESULT parent differs from input evidence');
+  }
+  exactKeys(body.artifact, ARTIFACT_KEYS, 'worker RESULT artifact');
+  if (body.artifact.baseCommit !== input.baseline.sourceCommit
+    || body.artifact.baselineId !== input.baseline.id
+    || body.artifact.baselineTree !== input.baseline.sourceTree
+    || !DIGEST.test(String(body.artifact.htmlSha256 || ''))
+    || !DIGEST.test(String(body.artifact.coverSha256 || ''))
+    || !DIGEST.test(String(body.artifact.patchSha256 || ''))
+    || body.artifact.patchSha256 === input.parent.evidence.parentArtifact.patchSha256) {
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT artifact identity is invalid');
+  }
+  if (body.id !== experimentCandidateId(input, body.artifact.patchSha256)
+    || body.url !== `/ugc/u/local-experiments/${body.id}.html`
+    || body.coverUrl !== `/ugc/u/local-experiments/${body.id}.cover.png`) {
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT candidate projection is invalid');
+  }
+  exactKeys(body.concept, CONCEPT_KEYS, 'worker RESULT concept');
+  if (body.concept.feedback !== input.request.instruction) {
+    throw contractError('experiment_worker_binding_mismatch', 'worker RESULT feedback differs from input');
+  }
+  for (const [key, max] of [['prompt', 500], ['pitch', 500], ['mechanic', 500], ['feeling', 240]]) {
+    printable(body.concept[key], `concept.${key}`, { min: 0, max, maxBytes: max * 4 });
+  }
+  validateMetrics(body.conformance, CONFORMANCE_KEYS, 'conformance');
+  validateMetrics(body.autoplay, AUTOPLAY_KEYS, 'autoplay');
+  count(body.wallTimeMs, 'wallTimeMs');
+  count(body.playtestRuns, 'playtestRuns', { min: 1, max: 2 });
+  if (body.playtestRuns !== body.autoplay.runNumber) {
+    throw contractError('experiment_worker_result_invalid', 'playtestRuns differs from autoplay.runNumber');
+  }
+  count(body.coverBytes, 'coverBytes', { min: 1 });
+  printable(body.title, 'title', { max: 60, maxBytes: 240 });
+  printable(body.agentSummary, 'agentSummary', { min: 0, max: 5000, maxBytes: 20_000 });
+  if (body.agentSummary !== sanitiseModelEvidence(body.agentSummary, 5000)) {
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT summary is not redacted');
+  }
+  if (!ISO_MILLIS.test(String(body.createdAt || '')) || Number.isNaN(Date.parse(body.createdAt))) {
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT createdAt is invalid');
+  }
+  if (!Array.isArray(body.files) || body.files.length < 1 || body.files.length > 200
+    || JSON.stringify(body.files) !== JSON.stringify([...new Set(body.files)].sort())
+    || body.files.some((file) => typeof file !== 'string' || !SOURCE.test(file) || file.includes('..'))) {
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT files are unsafe or non-canonical');
+  }
+  return Object.freeze(value);
+}
+
+export function buildWorkerResult(runtimeFields, expectedInput) {
+  const input = verifyWorkerInput(expectedInput);
+  const runtime = structuredClone(runtimeFields);
+  exactKeys(runtime, RUNTIME_RESULT_KEYS, 'worker runtime RESULT');
+  const artifact = structuredClone(runtime.artifact);
+  const id = experimentCandidateId(input, artifact.patchSha256);
+  const body = {
+    schema: WORKER_RESULT_SCHEMA,
+    inputDigest: input.inputDigest,
+    requestId: input.request.id,
+    attemptUid: input.attempt.id,
+    jobId: input.attempt.jobId,
+    modelExecutionReceiptId: input.attempt.modelExecutionReceiptId,
+    id,
+    parent: {
+      experimentId: input.parent.targetId,
+      parentArtifactDigest: input.parent.evidence.parentArtifactDigest,
+      parentReviewDigest: input.parent.evidence.parentReviewDigest,
+    },
+    baselineId: input.baseline.id,
+    provider: input.model.provider,
+    baseCommit: input.baseline.sourceCommit,
+    baselineTree: input.baseline.sourceTree,
+    title: runtime.title,
+    concept: { ...runtime.concept, feedback: input.request.instruction },
+    autoplayPassed: runtime.autoplayPassed,
+    wallTimeMs: runtime.wallTimeMs,
+    agentInvocations: runtime.agentInvocations,
+    playtestRuns: runtime.playtestRuns,
+    conformance: runtime.conformance,
+    autoplay: runtime.autoplay,
+    gateVersion: input.worker.gateVersion,
+    workerContractDigest: input.worker.contractDigest,
+    model: input.model.argument,
+    effort: input.model.effort,
+    testSeed: input.worker.testSeed,
+    files: runtime.files,
+    agentSummary: sanitiseModelEvidence(runtime.agentSummary, 5000),
+    createdAt: runtime.createdAt,
+    url: `/ugc/u/local-experiments/${id}.html`,
+    coverUrl: `/ugc/u/local-experiments/${id}.cover.png`,
+    coverBytes: runtime.coverBytes,
+    artifact,
   };
+  const result = { ...body, resultDigest: digestOf(body) };
+  return verifyWorkerResult(result, input);
 }
 
-// Success requires complete evidence: a proven autoplay win, conformance and
-// autoplay metrics, the artifact bytes and the cover. Anything missing is a
-// typed refusal, never a soft success.
+const SECRET_ASSIGNMENT = /\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|API_KEY|AUTH|PASSWORD)[A-Z0-9_]*)\s*[=:]\s*([^\s,;]+)/gi;
+const BEARER = /\bBearer\s+[^\s,;]+/gi;
+const JWT = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]{10,})?\b/g;
+const TELEGRAM_HASH = /([?&]|\b)(hash|query_id|initData)=([^\s&]+)/gi;
+
+export function sanitiseModelEvidence(value, limit = 2000) {
+  const redact = (input) => String(input || '')
+    .replace(SECRET_ASSIGNMENT, '$1=[REDACTED]')
+    .replace(BEARER, 'Bearer [REDACTED]')
+    .replace(JWT, '[REDACTED_JWT]')
+    .replace(TELEGRAM_HASH, '$1$2=[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const first = redact(value);
+  const boundedTail = first.length > limit ? first.slice(-limit) : first;
+  return redact(boundedTail).slice(0, limit);
+}
+
+export function verifyWorkerFailure(raw, expectedInput) {
+  const input = verifyWorkerInput(expectedInput);
+  const value = structuredClone(raw);
+  exactKeys(value, FAILURE_KEYS, 'worker ERROR');
+  if (value.schema !== WORKER_FAILURE_SCHEMA || !DIGEST.test(String(value.failureDigest || ''))) {
+    throw contractError('experiment_worker_failure_invalid', 'worker ERROR identity is invalid');
+  }
+  const { failureDigest, ...body } = value;
+  if (failureDigest !== digestOf(body)) {
+    throw contractError('experiment_worker_failure_digest_mismatch', 'worker ERROR digest does not replay');
+  }
+  verifyBoundIdentity(body, input);
+  if (!/^[a-z][a-z0-9_]{0,99}$/.test(String(body.code || ''))
+    || body.message !== sanitiseModelEvidence(body.message, 2000)) {
+    throw contractError('experiment_worker_failure_invalid', 'worker ERROR is unbounded or not redacted');
+  }
+  return Object.freeze(value);
+}
+
+export function buildWorkerFailure({ input: expectedInput, code, message }) {
+  const input = verifyWorkerInput(expectedInput);
+  const safeCode = /^[a-z][a-z0-9_]{0,99}$/.test(String(code || '')) ? String(code) : 'worker_failed';
+  const body = {
+    schema: WORKER_FAILURE_SCHEMA,
+    inputDigest: input.inputDigest,
+    requestId: input.request.id,
+    attemptUid: input.attempt.id,
+    jobId: input.attempt.jobId,
+    modelExecutionReceiptId: input.attempt.modelExecutionReceiptId,
+    code: safeCode,
+    message: sanitiseModelEvidence(message, 2000),
+    provider: input.model.provider,
+    model: input.model.argument,
+  };
+  const failure = { ...body, failureDigest: digestOf(body) };
+  return verifyWorkerFailure(failure, input);
+}
+
 export function assertCompleteEvidence({
   validated,
   artifactHtml,
@@ -154,253 +488,6 @@ export function assertCompleteEvidence({
   if (!autoplayMetrics) missing.push('autoplay_metrics');
   if (autoplayPassed !== true) missing.push('autoplay_win');
   if (missing.length) {
-    throw contractError(
-      'incomplete_evidence',
-      `worker success requires complete evidence; missing: ${missing.join(', ')}`,
-    );
+    throw contractError('incomplete_evidence', `worker success requires complete evidence; missing: ${missing.join(', ')}`);
   }
-}
-
-const RESULT_FIELD_KEYS = [
-  'agentInvocations',
-  'agentSummary',
-  'artifact',
-  'attemptUid',
-  'autoplay',
-  'autoplayPassed',
-  'baseCommit',
-  'baselineId',
-  'concept',
-  'conformance',
-  'coverBytes',
-  'coverUrl',
-  'createdAt',
-  'effort',
-  'files',
-  'id',
-  'model',
-  'parent',
-  'playtestRuns',
-  'provider',
-  'testSeed',
-  'title',
-  'url',
-  'wallTimeMs',
-];
-
-function requireBoundedString(value, label, { min = 1, max = 500 } = {}) {
-  if (typeof value !== 'string' || value.length < min || value.length > max) {
-    throw contractError('invalid_result', `${label} must be a ${min}..${max} character string`);
-  }
-  return value;
-}
-
-function requireCount(value, label, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
-  if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw contractError('invalid_result', `${label} must be an integer in [${min}, ${max}]`);
-  }
-  return value;
-}
-
-function requirePlainObject(value, label) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw contractError('invalid_result', `${label} must be a plain object`);
-  }
-  return value;
-}
-
-// Metrics are frozen exact evidence, not free-form diagnostics: the fields
-// below are exactly what the conformance and autoplay gates measure, with
-// bounds that a real browser run can actually produce.
-export function validateConformanceMetrics(value) {
-  exactKeys(value, ['idleMs', 'rafFrames'], 'conformance metrics');
-  requireCount(value.idleMs, 'conformance.idleMs', { min: 1, max: 600000 });
-  requireCount(value.rafFrames, 'conformance.rafFrames', { min: 0, max: 10_000_000 });
-  return value;
-}
-
-export function validateAutoplayMetrics(value) {
-  exactKeys(value, ['durationMs', 'rafFrames', 'runNumber', 'visualStates'], 'autoplay metrics');
-  requireCount(value.durationMs, 'autoplay.durationMs', { min: 1, max: 86_400_000 });
-  requireCount(value.rafFrames, 'autoplay.rafFrames', { min: 1, max: 10_000_000 });
-  // The gate itself requires at least two distinct canvas states for a win.
-  requireCount(value.visualStates, 'autoplay.visualStates', { min: 2, max: 1_000_000 });
-  if (![1, 2].includes(value.runNumber)) {
-    throw contractError('invalid_result', 'autoplay.runNumber must be 1 or 2 (single flake retry)');
-  }
-  return value;
-}
-
-export function validateAttemptUid(value, { required = false } = {}) {
-  if (value === null || value === undefined) {
-    if (required) {
-      throw contractError('invalid_attempt_uid', 'a rework run requires the durable attempt UUID');
-    }
-    return null;
-  }
-  if (typeof value !== 'string' || !CANONICAL_UUID.test(value)) {
-    throw contractError('invalid_attempt_uid', 'attemptUid must be a canonical lowercase UUID');
-  }
-  return value;
-}
-
-function validateWorkerResultFields(fields) {
-  exactKeys(fields, RESULT_FIELD_KEYS, 'worker result');
-  if (fields.autoplayPassed !== true) {
-    throw contractError('autoplay_unproven', 'a typed worker RESULT exists only for a proven autoplay win');
-  }
-  if (fields.agentInvocations !== 1) {
-    throw contractError(
-      'multiple_provider_invocations_share_one_job',
-      'one job carries exactly one physical model invocation',
-    );
-  }
-  if (!EXPERIMENT_ID.test(String(fields.id))) {
-    throw contractError('invalid_result', 'experiment id is invalid');
-  }
-  validateAttemptUid(fields.attemptUid, { required: fields.parent !== null });
-  if (fields.attemptUid !== null && !String(fields.id).endsWith(`-${fields.attemptUid}`)) {
-    throw contractError('invalid_result', 'candidate id must embed the full untruncated attempt UUID');
-  }
-  if (!['codex', 'claude'].includes(fields.provider)) {
-    throw contractError('invalid_result', 'provider must be codex or claude');
-  }
-  requireBoundedString(fields.model, 'model', { min: 1, max: 80 });
-  requireBoundedString(fields.effort, 'effort', { min: 1, max: 32 });
-  requireBoundedString(fields.title, 'title', { min: 1, max: 60 });
-  requireBoundedString(fields.agentSummary, 'agentSummary', { min: 0, max: 5000 });
-  requireCount(fields.wallTimeMs, 'wallTimeMs', { min: 0 });
-  requireCount(fields.playtestRuns, 'playtestRuns', { min: 1, max: 1000 });
-  requireCount(fields.coverBytes, 'coverBytes', { min: 1 });
-  requireCount(fields.testSeed, 'testSeed', { min: 0, max: 0xffffffff });
-  if (!ISO_MILLIS.test(String(fields.createdAt)) || Number.isNaN(Date.parse(fields.createdAt))) {
-    throw contractError('invalid_result', 'createdAt must be an exact millisecond ISO timestamp');
-  }
-  const concept = requirePlainObject(fields.concept, 'concept');
-  exactKeys(concept, CONCEPT_KEYS, 'concept');
-  requireBoundedString(concept.prompt, 'concept.prompt', { min: 0, max: 500 });
-  requireBoundedString(concept.pitch, 'concept.pitch', { min: 0, max: 500 });
-  requireBoundedString(concept.mechanic, 'concept.mechanic', { min: 0, max: 500 });
-  requireBoundedString(concept.feeling, 'concept.feeling', { min: 0, max: 240 });
-  if (concept.feedback !== null) validateExperimentFeedback(concept.feedback, { required: true });
-  validateConformanceMetrics(requirePlainObject(fields.conformance, 'conformance'));
-  validateAutoplayMetrics(requirePlainObject(fields.autoplay, 'autoplay'));
-  if (
-    !Array.isArray(fields.files)
-    || fields.files.length < 1
-    || fields.files.length > 200
-    || new Set(fields.files).size !== fields.files.length
-    || fields.files.some(
-      (file) => typeof file !== 'string'
-        || file.length > 240
-        || file.includes('..')
-        || !SOURCE_FILE.test(file),
-    )
-  ) {
-    throw contractError(
-      'invalid_result',
-      'files must be unique marble-sort-swipe/src/**.ts paths (the exact validateDiff domain)',
-    );
-  }
-  const parent = buildParentBinding(fields.parent);
-  const artifact = buildArtifactIdentity(fields.artifact);
-  if (fields.baseCommit !== artifact.baseCommit || fields.baselineId !== artifact.baselineId) {
-    throw contractError(
-      'invalid_result',
-      'top-level baseCommit/baselineId must equal the artifact identity',
-    );
-  }
-  if (fields.url !== `/ugc/u/local-experiments/${fields.id}.html`) {
-    throw contractError('invalid_result', 'url must derive from the experiment id');
-  }
-  if (fields.coverUrl !== `/ugc/u/local-experiments/${fields.id}.cover.png`) {
-    throw contractError('invalid_result', 'coverUrl must derive from the experiment id');
-  }
-  if (parent !== null && parent.patchSha256 === artifact.patchSha256) {
-    throw contractError('invalid_result', 'a tuning pass must change the parent patch');
-  }
-  return { parent, artifact };
-}
-
-export function buildWorkerResult(fields) {
-  const { parent, artifact } = validateWorkerResultFields(fields);
-  const result = { schema: WORKER_RESULT_SCHEMA, ...fields, parent, artifact };
-  return { ...result, resultDigest: digestOf(result) };
-}
-
-export function verifyWorkerResult(result) {
-  exactKeys(
-    result,
-    ['schema', 'resultDigest', ...RESULT_FIELD_KEYS],
-    'worker result document',
-  );
-  if (result.schema !== WORKER_RESULT_SCHEMA) {
-    throw contractError('invalid_result', 'unknown worker result schema');
-  }
-  const { schema, resultDigest, ...fields } = result;
-  // Full domain re-validation: a re-signed document with a valid digest over
-  // invalid claims (unproven autoplay, extra invocations, identity mismatch,
-  // smuggled fields) must fail exactly like a byte-tampered one.
-  validateWorkerResultFields(fields);
-  if (digestOf({ schema, ...fields }) !== resultDigest) {
-    throw contractError('result_digest_mismatch', 'worker result digest does not replay');
-  }
-  return result;
-}
-
-const FAILURE_CODE = /^[a-z][a-z0-9_]{2,64}$/;
-const FAILURE_KEYS = ['code', 'message', 'model', 'parent', 'provider', 'schema'];
-const HOME_DIR = process.env.HOME || '';
-
-// Failure text leaves the machine, so it is redacted before it is signed:
-// control characters collapse to spaces, ANSI sequences are dropped, local
-// absolute paths lose the home prefix, and the length is bounded.
-export function redactFailureMessage(raw) {
-  let text = String(raw || '');
-  text = text.replace(/\u001b\[[0-9;]*m/g, '');
-  text = text.replace(/[\u0000-\u001f\u007f]+/g, ' ');
-  if (HOME_DIR) text = text.split(HOME_DIR).join('~');
-  text = text.replace(/\s+/g, ' ').trim();
-  return text.slice(0, 2000);
-}
-
-export function buildWorkerFailure({ code, message, parent = null, provider = null, model = null }) {
-  const safeCode = FAILURE_CODE.test(String(code || '')) ? String(code) : 'worker_failed';
-  const failure = {
-    schema: WORKER_FAILURE_SCHEMA,
-    code: safeCode,
-    message: redactFailureMessage(message),
-    parent: parent === null ? null : buildParentBinding(parent),
-    provider: provider === null || ['codex', 'claude'].includes(provider) ? provider : null,
-    model: model === null ? null : String(model).slice(0, 80),
-  };
-  return { ...failure, failureDigest: digestOf(failure) };
-}
-
-// Exact verifier for the typed ERROR channel: consumers must reject anything
-// that is not a well-formed, digest-replaying, redacted failure document.
-export function verifyWorkerFailure(failure) {
-  exactKeys(failure, [...FAILURE_KEYS, 'failureDigest'], 'worker failure document');
-  if (failure.schema !== WORKER_FAILURE_SCHEMA) {
-    throw contractError('invalid_failure', 'unknown worker failure schema');
-  }
-  if (!FAILURE_CODE.test(String(failure.code))) {
-    throw contractError('invalid_failure', 'failure code must be a lowercase snake_case token');
-  }
-  if (typeof failure.message !== 'string' || failure.message.length > 2000
-    || CONTROL_CHARS.test(failure.message) || failure.message !== redactFailureMessage(failure.message)) {
-    throw contractError('invalid_failure', 'failure message must be bounded redacted text');
-  }
-  if (failure.provider !== null && !['codex', 'claude'].includes(failure.provider)) {
-    throw contractError('invalid_failure', 'failure provider must be null, codex or claude');
-  }
-  if (failure.model !== null && (typeof failure.model !== 'string' || failure.model.length > 80)) {
-    throw contractError('invalid_failure', 'failure model must be null or a bounded string');
-  }
-  if (failure.parent !== null) buildParentBinding(failure.parent);
-  const { failureDigest, ...body } = failure;
-  if (digestOf(body) !== failureDigest) {
-    throw contractError('failure_digest_mismatch', 'worker failure digest does not replay');
-  }
-  return failure;
 }

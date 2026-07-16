@@ -10,12 +10,9 @@
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'fs';
 import { createServer } from 'http';
@@ -24,7 +21,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { assertHardenedExperimentHtml, installExternalNetworkDeny } from './hardening.mjs';
 import { sha256Hex, verifyWorkerResult } from './result-contract.mjs';
-import { readFileExact } from './publish-local.mjs';
+import { loadWorkerInputEnvelope, readFileExact } from './publish-local.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -36,7 +33,10 @@ const dryRun = process.env.UGC_PUBLISH_DRY_RUN === '1';
 const commitDryRun = process.env.UGC_PUBLISH_COMMIT_DRY_RUN === '1';
 const testTimeoutMs = Math.max(30, Number(process.env.UGC_EXPERIMENT_TEST_TIMEOUT_SEC || 150)) * 1000;
 const minWinMs = Math.max(2, Number(process.env.UGC_EXPERIMENT_MIN_WIN_SEC || 3)) * 1000;
-const testSeed = Number(process.env.UGC_EXPERIMENT_TEST_SEED || 0x5eed1234) >>> 0;
+// Legacy manifests predate the worker-input envelope and retain their old env
+// fallback. Typed candidates replace this value with the server-owned input
+// seed before any browser gate runs.
+let testSeed = Number(process.env.UGC_EXPERIMENT_TEST_SEED || 0x5eed1234) >>> 0;
 const deployWaitMs = Math.max(0, Number(process.env.UGC_DEPLOY_WAIT_SEC || 90)) * 1000;
 const deployPollMs = Math.max(500, Number(process.env.UGC_DEPLOY_POLL_SEC || 3) * 1000);
 
@@ -45,11 +45,20 @@ for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^
 const id = String(args.id || '').trim();
 const user = String(args.user || 'dev').replace(/[^a-z0-9_-]/gi, '').toLowerCase().slice(0, 64) || 'dev';
 const chatId = String(args.chat || process.env.UGC_NOTIFY_CHAT_ID || '').trim();
+const inputEnvelopePath = String(args['input-envelope'] || '');
+const expectedInputDigest = String(args['input-digest'] || '');
 if (!/^[a-z0-9-]{8,80}$/.test(id)) throw new Error('invalid local experiment id');
 if (!dryRun && !commitDryRun && !baseUrl) throw new Error('UGC_BASE_URL is required before publishing');
 
 function status(phase, message) {
   console.log(`STATUS ${JSON.stringify({ phase, message })}`);
+}
+
+// Git blob identity over already captured bytes. Never ask git to reopen the
+// mutable source pathname after the exact closure has been verified.
+function gitBlobHash(bytes) {
+  const body = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  return createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex');
 }
 
 function run(command, commandArgs, options = {}) {
@@ -207,22 +216,42 @@ const artifactPath = path.join(artifactRoot, `${id}.html`);
 const coverPath = path.join(artifactRoot, `${id}.cover.png`);
 const patchPath = path.join(localRoot, `${id}.patch`);
 const manifestPath = path.join(localRoot, `${id}.json`);
-if (!existsSync(artifactPath) || !existsSync(coverPath) || !existsSync(manifestPath)) throw new Error('local experiment artifact or real cover is unavailable');
 // The complete closure is captured exactly once with hardened no-follow
 // reads; every later gate, hash and publication step uses ONLY these bytes,
 // so the published artifact can never diverge from what was verified.
-const manifestBytes = readFileExact(manifestPath, 'experiment manifest');
-const htmlBytes = readFileExact(artifactPath, 'experiment html');
-const coverBytes = readFileExact(coverPath, 'experiment cover');
+const manifestBytes = readFileExact(
+  manifestPath,
+  'experiment manifest',
+  { trustedRoot: localRoot, maxBytes: 512 * 1024 },
+);
+const htmlBytes = readFileExact(
+  artifactPath,
+  'experiment html',
+  { trustedRoot: artifactRoot, maxBytes: 1024 * 1024 },
+);
+const coverBytes = readFileExact(
+  coverPath,
+  'experiment cover',
+  { trustedRoot: artifactRoot, maxBytes: 512 * 1024 },
+);
 const manifest = JSON.parse(manifestBytes.toString('utf8'));
 if (manifest.id !== id) throw new Error('local experiment manifest id mismatch');
 const typedResult = manifest.schema === 'ugc.experiment-worker-result.v1';
 if (typedResult) {
+  if (!manifestBytes.equals(Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'))) {
+    throw new Error('local experiment manifest serialization is non-canonical');
+  }
+  const workerInput = loadWorkerInputEnvelope({ inputPath: inputEnvelopePath, expectedInputDigest });
+  testSeed = workerInput.worker.testSeed;
   // A typed candidate publishes only through its verified closure: the
   // manifest re-validates in full and the captured bytes must replay every
   // digest it committed to, including the patch.
-  verifyWorkerResult(manifest);
-  const patchBytes = readFileExact(patchPath, 'experiment patch');
+  verifyWorkerResult(manifest, workerInput);
+  const patchBytes = readFileExact(
+    patchPath,
+    'experiment patch',
+    { trustedRoot: localRoot, maxBytes: 4 * 1024 * 1024 },
+  );
   if (sha256Hex(htmlBytes) !== manifest.artifact.htmlSha256
     || sha256Hex(coverBytes) !== manifest.artifact.coverSha256
     || sha256Hex(patchBytes) !== manifest.artifact.patchSha256) {
@@ -267,11 +296,11 @@ try {
     if (hasRemoteHtml || hasRemoteCover || hasRemoteMeta) {
       if (!hasRemoteHtml || !hasRemoteMeta) throw new Error('remote experiment is incomplete; refusing to overwrite it');
       const remoteBlob = (await git(['rev-parse', remoteHtmlRef])).trim();
-      const localBlob = (await git(['hash-object', artifactPath])).trim();
+      const localBlob = gitBlobHash(htmlBytes);
       if (remoteBlob !== localBlob) throw new Error('remote experiment id collision; refusing to overwrite it');
       if (hasRemoteCover) {
         const remoteCoverBlob = (await git(['rev-parse', remoteCoverRef])).trim();
-        const localCoverBlob = (await git(['hash-object', coverPath])).trim();
+        const localCoverBlob = gitBlobHash(coverBytes);
         if (remoteCoverBlob !== localCoverBlob) throw new Error('remote experiment cover collision; refusing to overwrite it');
         commit = (await git(['log', '-1', '--format=%H', `origin/${branch}`, '--', relCover])).trim();
         status('already-published', 'The exact artifact and real cover are already present in swipe-ugc');
@@ -343,9 +372,9 @@ try {
         commit = (await git(['rev-parse', 'HEAD'], { cwd: worktree })).trim();
         await git(['fetch', '--depth', '20', 'origin', branch]);
         const remoteBlob = (await git(['rev-parse', `origin/${branch}:${relHtml}`])).trim();
-        const localBlob = (await git(['hash-object', artifactPath])).trim();
+        const localBlob = gitBlobHash(htmlBytes);
         const remoteCoverBlob = (await git(['rev-parse', `origin/${branch}:${relCover}`])).trim();
-        const localCoverBlob = (await git(['hash-object', coverPath])).trim();
+        const localCoverBlob = gitBlobHash(coverBytes);
         if (remoteBlob !== localBlob || remoteCoverBlob !== localCoverBlob || !await gitExists(`origin/${branch}:${relMeta}`)) {
           throw new Error('push returned but the exact artifact was not verified in origin');
         }
