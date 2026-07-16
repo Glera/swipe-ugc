@@ -31,6 +31,7 @@ const GOLDEN = JSON.parse(
 function resultFields(overrides = {}) {
   return {
     id: 'gravity-wells-abc1234def',
+    attemptUid: null,
     parent: { experimentId: 'wild-sort-0123456789', patchSha256: 'b'.repeat(64) },
     baselineId: 'sort-v2',
     provider: 'claude',
@@ -133,6 +134,53 @@ test('typed result exists only for one proven invocation', () => {
   assert.equal(fresh.parent, null);
 });
 
+test('a re-signed forged result fails full domain re-validation', () => {
+  const honest = buildWorkerResult(resultFields());
+  const resign = (mutate) => {
+    const { resultDigest, ...body } = honest;
+    const forged = mutate({ ...body });
+    return { ...forged, resultDigest: digestOf(forged) };
+  };
+  // Valid digest over invalid claims: every forgery below carries a digest
+  // that replays, so only full re-validation can reject it.
+  assert.throws(
+    () => verifyWorkerResult(resign((body) => ({ ...body, autoplayPassed: false }))),
+    (error) => error.code === 'autoplay_unproven',
+  );
+  assert.throws(
+    () => verifyWorkerResult(resign((body) => ({ ...body, agentInvocations: 3 }))),
+    (error) => error.code === 'multiple_provider_invocations_share_one_job',
+  );
+  assert.throws(
+    () => verifyWorkerResult(resign((body) => ({ ...body, smuggled: 'payload' }))),
+    (error) => error.code === 'unknown_field',
+  );
+  assert.throws(
+    () => verifyWorkerResult(resign((body) => ({ ...body, baseCommit: '9'.repeat(40) }))),
+    (error) => error.code === 'invalid_result',
+  );
+  assert.throws(
+    () => verifyWorkerResult(resign((body) => ({ ...body, url: '/elsewhere.html' }))),
+    (error) => error.code === 'invalid_result',
+  );
+  assert.throws(
+    () => verifyWorkerResult(
+      resign((body) => ({ ...body, conformance: 'trust me' })),
+    ),
+    (error) => error.code === 'invalid_result',
+  );
+  // A tuning pass whose patch digest equals its parent is a forged no-op.
+  assert.throws(
+    () => verifyWorkerResult(
+      resign((body) => ({
+        ...body,
+        parent: { experimentId: body.parent.experimentId, patchSha256: body.artifact.patchSha256 },
+      })),
+    ),
+    (error) => error.code === 'invalid_result',
+  );
+});
+
 test('incomplete evidence is a typed refusal that names what is missing', () => {
   const complete = {
     validated: { patch: 'diff --git a b' },
@@ -176,7 +224,7 @@ test('experiment worker source keeps the exact contract', () => {
   assert.ok(!/MAX_ATTEMPTS/.test(source), 'the internal repair loop must stay removed');
   const invocations = source.match(/await invokeAgent\(/g) || [];
   assert.equal(invocations.length, 1, 'one job carries exactly one model invocation');
-  assert.ok(source.includes('buildWorkerResult'), 'RESULT must go through the typed contract');
+  assert.ok(source.includes('publishExperimentResult'), 'RESULT must go through the typed publication module');
   assert.ok(source.includes('assertCompleteEvidence'), 'success requires complete evidence');
   assert.ok(!/soft-gate/.test(source), 'the unproven-win soft success must stay removed');
 });

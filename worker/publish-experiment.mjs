@@ -24,6 +24,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { assertHardenedExperimentHtml, installExternalNetworkDeny } from './hardening.mjs';
+import { sha256Hex, verifyWorkerResult } from './result-contract.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -208,6 +209,17 @@ const manifestPath = path.join(localRoot, `${id}.json`);
 if (!existsSync(artifactPath) || !existsSync(coverPath) || !existsSync(manifestPath)) throw new Error('local experiment artifact or real cover is unavailable');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 if (manifest.id !== id) throw new Error('local experiment manifest id mismatch');
+const typedResult = manifest.schema === 'ugc.experiment-worker-result.v1';
+if (typedResult) {
+  // A typed candidate publishes only through its verified closure: the
+  // manifest re-validates in full and the artifact bytes must replay the
+  // digests it committed to.
+  verifyWorkerResult(manifest);
+  if (sha256Hex(readFileSync(artifactPath)) !== manifest.artifact.htmlSha256
+    || sha256Hex(readFileSync(coverPath)) !== manifest.artifact.coverSha256) {
+    throw new Error('local experiment artifact bytes do not replay the typed result identity');
+  }
+}
 const html = readFileSync(artifactPath, 'utf8');
 assertHardenedExperimentHtml(html);
 if (statSync(artifactPath).size > 1024 * 1024) throw new Error('experiment HTML exceeds the 1 MB publish limit');
@@ -277,7 +289,7 @@ try {
           cover: relCover,
           template: 'sort',
           experimentId: id,
-          parentId: manifest.parentId || null,
+          parentId: typedResult ? (manifest.parent?.experimentId ?? null) : (manifest.parentId || null),
           baseCommit: manifest.baseCommit,
           title: manifest.title,
           version,
@@ -290,7 +302,7 @@ try {
           mediaBytes: 0,
           mountCost: 'medium',
           autoplayPassed: true,
-          attempts: manifest.attempts,
+          attempts: typedResult ? manifest.agentInvocations : manifest.attempts,
         }, null, 2)}\n`);
       }
 

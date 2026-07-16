@@ -35,10 +35,10 @@ import { modelInvocationArgs, normaliseModelInvocation } from './model-invocatio
 import {
   assertCompleteEvidence,
   buildWorkerFailure,
-  buildWorkerResult,
-  sha256Hex,
+  contractError,
   validateExperimentFeedback,
 } from './result-contract.mjs';
+import { loadParentClosure, publishExperimentResult } from './publish-local.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -75,21 +75,19 @@ const args = {};
 for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];
 const prompt = String(args.prompt || '').trim().slice(0, 500);
 const parentId = String(args.parent || '').trim();
-// Reviewer/operator feedback is exact contract input: 1..2000 raw characters,
-// required for a tuning pass, never truncated or rewritten by the worker.
-const feedback = validateExperimentFeedback(args.feedback, {
-  required: Boolean(parentId),
-});
 const provider = args.provider === 'codex' ? 'codex' : 'claude';
 const requestedModel = String(args.model || '').trim();
 const selectedModel = requestedModel || (provider === 'codex' ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL);
-const invocation = normaliseModelInvocation({ provider, model: selectedModel, effort: REQUESTED_EFFORT });
-const EFFORT = invocation.effort;
 const baselineId = String(args.baseline || 'sort-v2').trim();
 const baseline = baselineCatalog.baselines?.[baselineId];
-if (!baseline || baseline.template !== 'sort' || baseline.releasePlayable !== false) {
-  fail(`unknown or unsafe generator baseline: ${baselineId}`);
-}
+// Everything that can reject operator input is validated INSIDE the typed
+// error boundary (the main try below), so a bad argument always leaves as a
+// single-line typed ERROR with exit 1 — never a raw stack trace. These are
+// assigned there before any other work.
+let feedback = '';
+let invocation = null;
+let EFFORT = '';
+let attemptUid = null;
 let concept;
 try { concept = JSON.parse(String(args.concept || '{}')); } catch { concept = {}; }
 const title = String(concept.title || 'Wild sort experiment').trim().slice(0, 60);
@@ -150,22 +148,6 @@ async function runChecked(command, commandArgs, options = {}) {
   if (result.timedOut) throw new Error(`${command} timed out`);
   if (result.code !== 0) throw new Error((result.stderr || result.stdout || `${command} failed`).slice(-7000));
   return result.stdout;
-}
-
-function loadParent() {
-  if (!parentId) return null;
-  if (!/^[a-z0-9-]{8,80}$/.test(parentId)) fail('invalid parent experiment id');
-  const manifestPath = path.join(localRoot, `${parentId}.json`);
-  const patchPath = path.join(localRoot, `${parentId}.patch`);
-  if (!existsSync(manifestPath) || !existsSync(patchPath)) fail('parent experiment is unavailable on this dev machine');
-  return {
-    manifest: JSON.parse(readFileSync(manifestPath, 'utf8')),
-    patchPath,
-    binding: {
-      experimentId: parentId,
-      patchSha256: sha256Hex(readFileSync(patchPath)),
-    },
-  };
 }
 
 const FORBIDDEN = [
@@ -588,63 +570,80 @@ async function autoplayWithFlakeRetry(html, attempt, onRun) {
   }
 }
 
-async function publishLocal({ patch, files, baseCommit, agentSummary, html, coverPng, parentBinding, metrics }) {
-  const digest = createHash('sha1').update(baseCommit).update('\0').update(patch).digest('hex').slice(0, 10);
+function publishCandidate({ patch, files, baseCommit, agentSummary, html, coverPng, parentBinding, metrics }) {
+  const digest = createHash('sha1').update(baseCommit).update(' ').update(patch).digest('hex').slice(0, 10);
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'wild-sort';
-  const id = `${slug}-${digest}`;
-  mkdirSync(localRoot, { recursive: true });
-  mkdirSync(artifactRoot, { recursive: true });
+  // The candidate id is immutable: content-addressed, and additionally bound
+  // to the generator's immutable attempt when one is supplied, so two runs
+  // can never share one mutable id.
+  const id = attemptUid ? `${slug}-${digest}-${attemptUid.slice(0, 12)}` : `${slug}-${digest}`;
   assertHardenedExperimentHtml(html);
-  writeFileSync(path.join(artifactRoot, `${id}.html`), html);
-  writeFileSync(path.join(artifactRoot, `${id}.cover.png`), coverPng);
-  writeFileSync(path.join(localRoot, `${id}.patch`), patch);
-  // The manifest IS the typed worker result: exact keys, parent binding,
-  // artifact identity and a deterministic self-digest the generator verifies.
-  const result = buildWorkerResult({
-    id,
-    parent: parentBinding,
-    baselineId,
-    provider,
-    baseCommit,
-    title,
-    concept: {
-      prompt,
-      feedback: feedback || null,
-      pitch,
-      mechanic,
-      feeling,
-    },
-    autoplayPassed: true,
-    wallTimeMs: Date.now() - experimentStartedAt,
-    agentInvocations: metrics.agentInvocations,
-    playtestRuns: metrics.playtestRuns,
-    conformance: metrics.conformance,
-    autoplay: metrics.autoplay,
-    model: selectedModel,
-    effort: EFFORT,
-    testSeed: TEST_SEED,
-    files,
-    agentSummary,
-    createdAt: new Date().toISOString(),
-    url: `/ugc/u/local-experiments/${id}.html`,
-    coverUrl: `/ugc/u/local-experiments/${id}.cover.png`,
-    coverBytes: coverPng.length,
-    artifact: {
-      baseCommit,
+  return publishExperimentResult({
+    localRoot,
+    artifactRoot,
+    html,
+    coverPng,
+    patch,
+    fields: {
+      id,
+      attemptUid,
+      parent: parentBinding,
       baselineId,
-      htmlSha256: sha256Hex(html),
-      coverSha256: sha256Hex(coverPng),
-      patchSha256: sha256Hex(patch),
+      provider,
+      baseCommit,
+      title,
+      concept: {
+        prompt,
+        feedback: feedback || null,
+        pitch,
+        mechanic,
+        feeling,
+      },
+      autoplayPassed: true,
+      wallTimeMs: Date.now() - experimentStartedAt,
+      agentInvocations: metrics.agentInvocations,
+      playtestRuns: metrics.playtestRuns,
+      conformance: metrics.conformance,
+      autoplay: metrics.autoplay,
+      model: selectedModel,
+      effort: EFFORT,
+      testSeed: TEST_SEED,
+      files,
+      agentSummary,
+      createdAt: new Date().toISOString(),
+      url: `/ugc/u/local-experiments/${id}.html`,
+      coverUrl: `/ugc/u/local-experiments/${id}.cover.png`,
+      coverBytes: coverPng.length,
     },
   });
-  writeFileSync(path.join(localRoot, `${id}.json`), `${JSON.stringify(result, null, 2)}\n`);
-  return result;
 }
 
 let worktree = '';
 try {
+  // Typed error boundary for operator input: the exact request domain is
+  // enforced here so every rejection is a single-line typed ERROR, exit 1.
+  if (parentId && !/^[a-z0-9-]{8,80}$/.test(parentId)) {
+    throw contractError('invalid_parent', 'parent experiment id is invalid');
+  }
+  feedback = validateExperimentFeedback(args.feedback, { required: Boolean(parentId) });
+  invocation = normaliseModelInvocation({ provider, model: selectedModel, effort: REQUESTED_EFFORT });
+  EFFORT = invocation.effort;
+  if (args['attempt-uid'] !== undefined) {
+    attemptUid = String(args['attempt-uid']);
+    if (!/^[a-f0-9-]{8,64}$/.test(attemptUid)) {
+      throw contractError('invalid_attempt_uid', 'attempt uid must be a lowercase hex/dash id');
+    }
+  }
+  if (!baseline || baseline.template !== 'sort' || baseline.releasePlayable !== false) {
+    fail(`unknown or unsafe generator baseline: ${baselineId}`);
+  }
   if (!existsSync(path.join(playablesRoot, '.git'))) fail(`playables repo not found: ${playablesRoot}`);
-  const parent = loadParent();
+  // Parent closure is captured exactly once with hardened no-follow reads:
+  // manifest is a verified typed result, patch/html/cover bytes replay its
+  // artifact identity, and only the captured patch bytes are ever applied.
+  const parent = parentId
+    ? loadParentClosure({ localRoot, artifactRoot, parentId })
+    : null;
   const baseCommit = String(baseline.sourceCommit);
   const actualCommit = (await runChecked('git', ['rev-parse', `${baseCommit}^{commit}`], { cwd: playablesRoot })).trim();
   const actualTree = (await runChecked('git', ['rev-parse', `${baseCommit}:${baseline.sourcePath}`], { cwd: playablesRoot })).trim();
@@ -652,7 +651,7 @@ try {
     fail(`generator baseline ${baselineId} failed its immutable commit/tree lock`);
   }
   if (parent) {
-    const parentBaseline = parent.manifest.baselineId || (parent.manifest.baseCommit === baseCommit ? baselineId : '');
+    const parentBaseline = parent.manifest.baselineId;
     if (parentBaseline !== baselineId) fail('parent experiment belongs to a different generator baseline');
   }
   worktree = mkdtempSync(path.join(tmpdir(), 'swipe-wild-sort-'));
@@ -665,7 +664,14 @@ try {
   const dependencies = path.join(playablesRoot, 'node_modules');
   if (!existsSync(dependencies)) fail('playables/node_modules is missing; run npm ci before starting the local lab');
   symlinkSync(dependencies, path.join(worktree, 'node_modules'), 'dir');
-  if (parent) await runChecked('git', ['apply', '--whitespace=nowarn', parent.patchPath], { cwd: worktree });
+  if (parent) {
+    // Apply ONLY the captured closure bytes from a path this process owns —
+    // the parent pathname is never re-opened after verification.
+    const capturedPatch = path.join(worktree, '.parent-closure.patch');
+    writeFileSync(capturedPatch, parent.patchBytes);
+    await runChecked('git', ['apply', '--whitespace=nowarn', capturedPatch], { cwd: worktree });
+    rmSync(capturedPatch, { force: true });
+  }
   status('typecheck-baseline', 'Recording pre-existing diagnostics so only new errors consume the experiment budget');
   const baselineDiagnostics = new Set((await collectTypeDiagnostics(worktree)).map(normalizeDiagnostic));
 
@@ -679,8 +685,10 @@ try {
   const agentSummary = await invokeAgent(worktree, Math.min(AGENT_TIMEOUT_MS, remainingMs));
   status('safety', 'Checking the code sandbox and patch budget', 1);
   const validated = await validateDiff(worktree, baseCommit);
-  if (parent && validated.patch === readFileSync(parent.patchPath, 'utf8')) {
-    throw new Error('TUNING FAILED: the agent did not change the parent experiment');
+  if (parent && validated.patch === parent.patchBytes.toString('utf8')) {
+    const unchanged = new Error('TUNING FAILED: the agent did not change the parent experiment');
+    unchanged.code = 'tuning_unchanged';
+    throw unchanged;
   }
   await typecheck(worktree, validated.files, baselineDiagnostics, 1);
   await build(worktree, 1);
@@ -705,7 +713,7 @@ try {
     autoplayMetrics,
   });
   status('publish', 'Autoplay won; saving the local experiment', 1);
-  const result = await publishLocal({
+  const published = publishCandidate({
     patch: validated.patch,
     files: validated.files,
     baseCommit,
@@ -720,7 +728,10 @@ try {
       autoplay: autoplayMetrics,
     },
   });
-  console.log(`RESULT ${JSON.stringify(result)}`);
+  if (published.replayed) {
+    status('publish-replayed', 'Identical immutable candidate already committed; replaying its exact bytes', 1);
+  }
+  console.log(`RESULT ${JSON.stringify(published.result)}`);
 } catch (error) {
   const failure = buildWorkerFailure({
     code: typeof error?.code === 'string' ? error.code : 'worker_failed',
