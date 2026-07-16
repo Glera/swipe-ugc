@@ -9,6 +9,7 @@ const files = [
   'worker/bake.mjs',
   'worker/capture-cover.mjs',
   'worker/experiment.mjs',
+  'worker/model-invocation.mjs',
   'worker/publish-experiment.mjs',
   'worker/test-preview.mjs',
 ];

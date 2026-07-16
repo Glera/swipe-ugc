@@ -31,6 +31,7 @@ import {
   hardenExperimentHtml,
   installExternalNetworkDeny,
 } from './hardening.mjs';
+import { modelInvocationArgs, normaliseModelInvocation } from './model-invocation.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -50,11 +51,9 @@ const TEST_TIMEOUT_MS = Math.max(30, Number(process.env.UGC_EXPERIMENT_TEST_TIME
 const IDLE_TEST_MS = Math.max(5, Number(process.env.UGC_EXPERIMENT_IDLE_SEC || 30)) * 1000;
 const MIN_WIN_MS = Math.max(2, Number(process.env.UGC_EXPERIMENT_MIN_WIN_SEC || 3)) * 1000;
 const TEST_SEED = Number(process.env.UGC_EXPERIMENT_TEST_SEED || 0x5eed1234) >>> 0;
-const CLAUDE_MODEL = process.env.ISLAND_EXPERIMENT_MODEL || 'sonnet';
-const CODEX_MODEL = String(process.env.CODEX_EXPERIMENT_MODEL || '').trim();
-const EFFORT = new Set(['low', 'medium', 'high', 'xhigh']).has(process.env.ISLAND_EXPERIMENT_EFFORT || '')
-  ? process.env.ISLAND_EXPERIMENT_EFFORT
-  : 'medium';
+const DEFAULT_CLAUDE_MODEL = process.env.ISLAND_EXPERIMENT_MODEL || 'sonnet';
+const DEFAULT_CODEX_MODEL = String(process.env.CODEX_EXPERIMENT_MODEL || 'gpt-5.6-sol').trim();
+const REQUESTED_EFFORT = String(process.env.CODEX_EXPERIMENT_EFFORT || process.env.ISLAND_EXPERIMENT_EFFORT || '');
 const experimentStartedAt = Date.now();
 
 function subscriptionCliEnv(provider) {
@@ -72,6 +71,10 @@ const prompt = String(args.prompt || '').trim().slice(0, 500);
 const feedback = String(args.feedback || '').trim().slice(0, 500);
 const parentId = String(args.parent || '').trim();
 const provider = args.provider === 'codex' ? 'codex' : 'claude';
+const requestedModel = String(args.model || '').trim();
+const selectedModel = requestedModel || (provider === 'codex' ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL);
+const invocation = normaliseModelInvocation({ provider, model: selectedModel, effort: REQUESTED_EFFORT });
+const EFFORT = invocation.effort;
 const baselineId = String(args.baseline || 'sort-v2').trim();
 const baseline = baselineCatalog.baselines?.[baselineId];
 if (!baseline || baseline.template !== 'sort' || baseline.releasePlayable !== false) {
@@ -273,6 +276,7 @@ async function invokeAgent(worktree, attempt, failure, timeboxMs) {
   const command = provider === 'codex' ? 'codex' : 'claude';
   const commandArgs = provider === 'codex'
     ? [
+        ...modelInvocationArgs(invocation),
         '--sandbox', 'workspace-write',
         '--ask-for-approval', 'never',
         '-c', 'sandbox_workspace_write.network_access=false',
@@ -281,7 +285,6 @@ async function invokeAgent(worktree, attempt, failure, timeboxMs) {
         '--ephemeral',
         '--ignore-user-config',
         '--ignore-rules',
-        ...(CODEX_MODEL ? ['--model', CODEX_MODEL] : []),
         agentPrompt(attempt, failure),
       ]
     : [
@@ -290,8 +293,7 @@ async function invokeAgent(worktree, attempt, failure, timeboxMs) {
         '--permission-mode', 'default',
         '--tools', 'Read,Edit',
         '--allowedTools', 'Read(./marble-sort-swipe/**),Read(./shared/**),Edit(./marble-sort-swipe/src/**)',
-        '--model', CLAUDE_MODEL,
-        '--effort', EFFORT,
+        ...modelInvocationArgs(invocation),
         '-p', agentPrompt(attempt, failure),
       ];
   const passStartedAt = Date.now();
@@ -606,8 +608,8 @@ async function publishLocal(patch, files, baseCommit, attempts, agentSummary, au
     playtestRuns: metrics.playtestRuns,
     conformance: metrics.conformance,
     autoplay: metrics.autoplay,
-    model: provider === 'codex' ? (CODEX_MODEL || 'subscription-default') : CLAUDE_MODEL,
-    effort: provider === 'codex' ? (CODEX_MODEL ? 'model-configured' : 'subscription-default') : EFFORT,
+    model: selectedModel,
+    effort: EFFORT,
     testSeed: TEST_SEED,
     files,
     agentSummary,
