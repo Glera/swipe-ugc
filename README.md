@@ -102,8 +102,14 @@ is not killed: five-minute PID/output/file-edit heartbeats remain visible as
 structured `agent`/`quiet` liveness.
 
 The lab strips Anthropic and OpenAI API variables from concept and coding
-subprocesses. It uses local CLI subscription logins and cannot silently fall
-back to API credentials inherited by either service.
+subprocesses. The worker passes only an explicit environment allowlist, checks
+Claude for first-party `claude.ai` auth or Codex for ChatGPT auth immediately
+before the single model invocation, and cannot silently fall back to inherited
+API/provider credentials. The disposable clone additionally snapshots protected
+Git metadata, normalizes and rejects hidden index flags, uses a private scratch
+index for intent-to-add diffs, and verifies that the trusted `node_modules`
+symlink was neither replaced nor redirected before and after every executable
+gate.
 
 Successful HTML and cover artifacts live under ignored `u/local-experiments/`; lineage patches
 and manifests live under ignored `.local-experiments/`. Generator job state is

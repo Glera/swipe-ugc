@@ -13,6 +13,7 @@ import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -42,6 +43,14 @@ import {
   loadWorkerInputEnvelope,
   publishExperimentResult,
 } from './publish-local.mjs';
+import {
+  assertGitMetadataUnchanged,
+  assertTrustedDependencyLink,
+  captureGitMetadata,
+  captureTrustedDependencyTarget,
+  hiddenIndexFlags,
+  indexFlagClearCommands,
+} from './worktree-integrity.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -62,12 +71,23 @@ const MIN_WIN_MS = Math.max(2, Number(process.env.UGC_EXPERIMENT_MIN_WIN_SEC || 
 let TEST_SEED = 0;
 const experimentStartedAt = Date.now();
 
+const SUBSCRIPTION_ENV_ALLOWLIST = [
+  'HOME', 'PATH', 'USER', 'LOGNAME', 'SHELL',
+  'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ',
+  'TERM', 'COLORTERM', 'NO_COLOR',
+  'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME',
+];
+
 function subscriptionCliEnv(provider) {
-  const env = { ...process.env };
-  const keys = provider === 'codex'
-    ? ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'AZURE_OPENAI_API_KEY', 'CODEX_API_KEY']
-    : ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
-  for (const key of keys) delete env[key];
+  if (!['claude', 'codex'].includes(provider)) fail('unknown subscription provider');
+  const env = {};
+  for (const key of SUBSCRIPTION_ENV_ALLOWLIST) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  env.GIT_OPTIONAL_LOCKS = '0';
+  env.GIT_CONFIG_NOSYSTEM = '1';
+  env.GIT_CONFIG_GLOBAL = '/dev/null';
   return env;
 }
 
@@ -105,7 +125,7 @@ function run(command, commandArgs, options = {}) {
     const child = spawn(command, commandArgs, {
       cwd: options.cwd,
       env: options.replaceEnv ? options.env : { ...process.env, ...(options.env || {}) },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '', timedOut = false, abortReason = '';
     let lastActivityAt = Date.now();
@@ -113,6 +133,10 @@ function run(command, commandArgs, options = {}) {
     const append = (current, chunk) => (current + chunk.toString()).slice(-max);
     child.stdout.on('data', (chunk) => { lastActivityAt = Date.now(); stdout = append(stdout, chunk); });
     child.stderr.on('data', (chunk) => { lastActivityAt = Date.now(); stderr = append(stderr, chunk); });
+    if (options.input !== undefined) {
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(String(options.input));
+    }
     options.onSpawn?.({ pid: child.pid, startedAt: lastActivityAt });
     const heartbeat = options.onHeartbeat ? setInterval(() => {
       if (child.exitCode !== null) return;
@@ -142,7 +166,89 @@ async function runChecked(command, commandArgs, options = {}) {
   const result = await run(command, commandArgs, options);
   if (result.timedOut) throw new Error(`${command} timed out`);
   if (result.code !== 0) throw new Error((result.stderr || result.stdout || `${command} failed`).slice(-7000));
-  return result.stdout;
+  return options.includeStderr ? `${result.stdout}\n${result.stderr}` : result.stdout;
+}
+
+function trustedGitEnv(overrides = {}) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
+  return {
+    ...env,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_OPTIONAL_LOCKS: '0',
+    LC_ALL: 'C',
+    ...overrides,
+  };
+}
+
+async function runTrustedGit(commandArgs, options = {}) {
+  const { env: envOverrides, ...rest } = options;
+  return runChecked('git', [
+    '--no-replace-objects',
+    '-c', 'core.hooksPath=/dev/null',
+    '-c', 'core.fsmonitor=false',
+    '-c', 'core.untrackedCache=false',
+    '-c', 'diff.external=',
+    '-c', 'core.attributesFile=/dev/null',
+    '-c', 'core.excludesFile=/dev/null',
+    ...commandArgs,
+  ], {
+    ...rest,
+    env: trustedGitEnv(envOverrides),
+    replaceEnv: true,
+  });
+}
+
+async function clearIndexFlags(worktree, files) {
+  for (const command of indexFlagClearCommands(files)) await runTrustedGit(command, { cwd: worktree });
+}
+
+async function normalizeIndexFlags(worktree) {
+  const tracked = (await runTrustedGit(['ls-files', '-z'], { cwd: worktree })).split('\0').filter(Boolean);
+  await clearIndexFlags(worktree, tracked);
+  const hidden = hiddenIndexFlags(await runTrustedGit(['ls-files', '-v', '-z'], { cwd: worktree }));
+  if (hidden.length) fail(`unable to clear hidden git index flags: ${hidden[0].file}`);
+}
+
+async function assertWorktreeIntegrity(worktree, integrity) {
+  assertGitMetadataUnchanged(worktree, integrity.git, { excludeIndex: true });
+  assertTrustedDependencyLink(worktree, integrity.dependencies);
+  const hidden = hiddenIndexFlags(await runTrustedGit(['ls-files', '-v', '-z'], { cwd: worktree }));
+  if (hidden.length) {
+    await clearIndexFlags(worktree, hidden.map(({ file }) => file));
+    fail(`agent set assume-unchanged/skip-worktree on ${hidden[0].file}; flags were cleared and the attempt was rejected`);
+  }
+  assertGitMetadataUnchanged(worktree, integrity.git);
+}
+
+async function assertSubscriptionAuth() {
+  if (provider === 'claude') {
+    const raw = await runChecked('claude', ['auth', 'status', '--json'], {
+      cwd: repoRoot,
+      timeoutMs: 15000,
+      maxBuffer: 100000,
+      env: subscriptionCliEnv('claude'),
+      replaceEnv: true,
+    });
+    let auth;
+    try { auth = JSON.parse(raw.trim()); } catch { fail('Claude subscription auth status is unreadable'); }
+    if (auth.loggedIn !== true || auth.authMethod !== 'claude.ai' || auth.apiProvider !== 'firstParty') {
+      fail('Claude is not authenticated through a first-party claude.ai subscription; refusing provider fallback');
+    }
+    return;
+  }
+  const raw = await runChecked('codex', ['login', 'status'], {
+    cwd: repoRoot,
+    timeoutMs: 15000,
+    maxBuffer: 100000,
+    env: subscriptionCliEnv('codex'),
+    replaceEnv: true,
+    includeStderr: true,
+  });
+  if (!/Logged in using ChatGPT/i.test(raw)) {
+    fail('Codex is not authenticated through ChatGPT; refusing provider fallback');
+  }
 }
 
 const FORBIDDEN = [
@@ -160,16 +266,17 @@ const FORBIDDEN = [
   [/\blocation\s*=|\blocation\.(?:href|assign|replace)\s*[=(]/i, 'navigation'],
 ];
 
-async function validateDiff(worktree, baseCommit) {
-  const head = (await runChecked('git', ['rev-parse', 'HEAD'], { cwd: worktree })).trim();
+async function validateDiff(worktree, baseCommit, integrity) {
+  await assertWorktreeIntegrity(worktree, integrity);
+  const head = (await runTrustedGit(['rev-parse', 'HEAD'], { cwd: worktree })).trim();
   if (head !== baseCommit) fail('agent changed git history inside the disposable clone');
-  const porcelain = await runChecked('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: worktree });
+  const porcelain = await runTrustedGit(['status', '--porcelain=v1', '--untracked-files=all'], { cwd: worktree });
   // Do not trim the whole porcelain stream: the leading space in " M path"
   // is the first status column, not whitespace.
   const entries = porcelain.split('\n').filter((line) => line.length >= 4).map((line) => ({
     code: line.slice(0, 2),
     file: line.slice(3).split(' -> ').pop(),
-  })).filter((entry) => entry.file !== 'node_modules'); // trusted dependency symlink created above
+  })).filter((entry) => entry.file !== 'node_modules');
   const allChanged = [...new Set(entries.map((entry) => entry.file))].sort();
   if (!allChanged.length) fail('agent made no code changes');
   for (const file of allChanged) {
@@ -177,14 +284,39 @@ async function validateDiff(worktree, baseCommit) {
       fail(`agent touched forbidden path: ${file}`);
     }
   }
-  const untracked = entries.filter((entry) => entry.code === '??').map((entry) => entry.file);
-  if (untracked.length) await runChecked('git', ['add', '-N', '--', ...untracked], { cwd: worktree });
-  const rawStatus = await runChecked('git', ['diff', '--name-status', '--', 'marble-sort-swipe/src'], { cwd: worktree });
-  if (/^D\s/m.test(rawStatus)) fail('agent deleted a source file');
+  const ignored = await runTrustedGit([
+    'status', '--ignored=matching', '--porcelain=v1', '--untracked-files=all',
+  ], { cwd: worktree });
+  const forbiddenIgnored = ignored.split('\n')
+    .filter((line) => line.startsWith('!! '))
+    .map((line) => line.slice(3).split(' -> ').pop())
+    .filter((file) => file !== 'node_modules' && !file.startsWith('node_modules/'));
+  if (forbiddenIgnored.length) fail(`agent created an ignored file outside the reviewable patch: ${forbiddenIgnored[0]}`);
 
-  const patch = await runChecked('git', ['diff', '--binary', '--', 'marble-sort-swipe/src'], { cwd: worktree, maxBuffer: 1024 * 1024 });
+  const untracked = entries.filter((entry) => entry.code === '??').map((entry) => entry.file);
+  const scratch = mkdtempSync(path.join(tmpdir(), 'swipe-diff-index-'));
+  let rawStatus;
+  let patch;
+  let numstat;
+  try {
+    const diffIndex = path.join(scratch, 'index');
+    const env = { GIT_INDEX_FILE: diffIndex };
+    await runTrustedGit(['read-tree', baseCommit], { cwd: worktree, env });
+    if (untracked.length) await runTrustedGit(['add', '-N', '--', ...untracked], { cwd: worktree, env });
+    rawStatus = await runTrustedGit([
+      'diff', '--no-ext-diff', '--ita-invisible-in-index', '--name-status', '--', 'marble-sort-swipe/src',
+    ], { cwd: worktree, env });
+    patch = await runTrustedGit([
+      'diff', '--no-ext-diff', '--ita-invisible-in-index', '--binary', '--', 'marble-sort-swipe/src',
+    ], { cwd: worktree, env, maxBuffer: 1024 * 1024 });
+    numstat = await runTrustedGit([
+      'diff', '--no-ext-diff', '--ita-invisible-in-index', '--numstat', '--', 'marble-sort-swipe/src',
+    ], { cwd: worktree, env });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  if (/^D\s/m.test(rawStatus)) fail('agent deleted a source file');
   if (Buffer.byteLength(patch) > 350 * 1024) fail('experiment patch exceeds 350 KB');
-  const numstat = await runChecked('git', ['diff', '--numstat', '--', 'marble-sort-swipe/src'], { cwd: worktree });
   const changedLines = numstat.trim().split('\n').filter(Boolean).reduce((sum, line) => {
     const [added, removed] = line.split('\t');
     return sum + (Number(added) || 0) + (Number(removed) || 0);
@@ -192,7 +324,10 @@ async function validateDiff(worktree, baseCommit) {
   if (changedLines < 20) fail(`experiment is too small (${changedLines} changed lines); make a material rules/render/autoplay variation`);
 
   for (const file of allChanged) {
-    const source = readFileSync(path.join(worktree, file), 'utf8');
+    const sourcePath = path.join(worktree, file);
+    const sourceStat = lstatSync(sourcePath, { throwIfNoEntry: false });
+    if (!sourceStat?.isFile()) fail(`agent source must be a regular file: ${file}`);
+    const source = readFileSync(sourcePath, 'utf8');
     for (const [pattern, label] of FORBIDDEN) if (pattern.test(source)) fail(`${file} uses forbidden capability: ${label}`);
     for (const match of source.matchAll(/(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"]([^'"]+)['"]/g)) {
       const specifier = match[1];
@@ -205,6 +340,7 @@ async function validateDiff(worktree, baseCommit) {
       fail(`${file} imports forbidden dependency: ${specifier}`);
     }
   }
+  await assertWorktreeIntegrity(worktree, integrity);
   return { patch, files: allChanged };
 }
 
@@ -263,6 +399,7 @@ async function invokeAgent(worktree, timeboxMs) {
   const attempt = 1; // exactly one physical model invocation per job
   status('agent', `${label} studies the pinned baseline and mutates the fork`, attempt);
   const command = provider === 'codex' ? 'codex' : 'claude';
+  const promptText = agentPrompt();
   const commandArgs = provider === 'codex'
     ? [
         ...modelInvocationArgs(invocation),
@@ -274,16 +411,17 @@ async function invokeAgent(worktree, timeboxMs) {
         '--ephemeral',
         '--ignore-user-config',
         '--ignore-rules',
-        agentPrompt(),
+        '-',
       ]
     : [
         '--no-session-persistence',
         '--disable-slash-commands',
-        '--permission-mode', 'default',
+        '--setting-sources', '',
+        '--permission-mode', 'dontAsk',
         '--tools', 'Read,Edit',
         '--allowedTools', 'Read(./marble-sort-swipe/**),Read(./shared/**),Edit(./marble-sort-swipe/src/**)',
         ...modelInvocationArgs(invocation),
-        '-p', agentPrompt(),
+        '-p',
       ];
   const passStartedAt = Date.now();
   let observedSourceMtime = latestSourceMtime(worktree);
@@ -294,6 +432,7 @@ async function invokeAgent(worktree, timeboxMs) {
     maxBuffer: 1024 * 1024,
     env: subscriptionCliEnv(provider),
     replaceEnv: true,
+    input: promptText,
     elapsedMs: () => Date.now() - passStartedAt,
     onSpawn: ({ pid }) => {
       const now = new Date().toISOString();
@@ -340,23 +479,28 @@ async function invokeAgent(worktree, timeboxMs) {
   return output.stdout.trim().slice(-2000);
 }
 
-async function build(worktree, attempt) {
+async function build(worktree, attempt, integrity) {
+  await assertWorktreeIntegrity(worktree, integrity);
   status('build', 'Building the mutated SWIPE fork', attempt);
   const result = await run('bash', ['scripts/build-swipe.sh', 'marble-sort-swipe'], {
     cwd: worktree,
     timeoutMs: 180000,
     maxBuffer: 2 * 1024 * 1024,
+    env: trustedGitEnv(),
+    replaceEnv: true,
   });
   if (result.timedOut) throw new Error('BUILD FAILED: build timed out');
   if (result.code !== 0) throw new Error(`BUILD FAILED\n${(result.stderr || result.stdout).slice(-7000)}`);
   const payload = path.join(worktree, 'marble-sort-swipe', 'dist-swipe', 'payload.js');
   if (!existsSync(payload)) throw new Error('BUILD FAILED: payload.js is missing');
   if (statSync(payload).size > 700 * 1024) throw new Error(`BUILD FAILED: payload is ${statSync(payload).size} bytes (limit 716800)`);
+  await assertWorktreeIntegrity(worktree, integrity);
 }
 
 const normalizeDiagnostic = (line) => line.replace(/\(\d+,\d+\)/, '(line)');
 
-async function collectTypeDiagnostics(worktree) {
+async function collectTypeDiagnostics(worktree, integrity = null) {
+  if (integrity) await assertWorktreeIntegrity(worktree, integrity);
   const tsc = path.join(worktree, 'node_modules', '.bin', 'tsc');
   if (!existsSync(tsc)) throw new Error('TYPECHECK FAILED: local TypeScript compiler is missing');
   const result = await run(tsc, ['--noEmit', '--pretty', 'false'], {
@@ -365,12 +509,13 @@ async function collectTypeDiagnostics(worktree) {
     maxBuffer: 4 * 1024 * 1024,
   });
   if (result.timedOut) throw new Error('TYPECHECK FAILED: tsc timed out');
+  if (integrity) await assertWorktreeIntegrity(worktree, integrity);
   return `${result.stdout}\n${result.stderr}`.split(/\r?\n/).filter((line) => /\.ts\(\d+,\d+\): error TS\d+:/.test(line));
 }
 
-async function typecheck(worktree, changedFiles, baselineDiagnostics, attempt) {
+async function typecheck(worktree, changedFiles, baselineDiagnostics, attempt, integrity) {
   status('typecheck', 'Checking new TypeScript diagnostics in the mutated files', attempt);
-  const diagnostics = await collectTypeDiagnostics(worktree);
+  const diagnostics = await collectTypeDiagnostics(worktree, integrity);
   const changed = diagnostics.filter((line) => changedFiles.some((file) => line.startsWith(`${file}(`)));
   const added = changed.filter((line) => !baselineDiagnostics.has(normalizeDiagnostic(line)));
   if (added.length) throw new Error(`TYPECHECK FAILED\n${added.slice(0, 20).join('\n')}`);
@@ -635,8 +780,8 @@ try {
   mechanic = String(parent.manifest.concept?.mechanic || 'Preserve the parent rule and improve its legibility.');
   feeling = String(parent.manifest.concept?.feeling || 'A clearer version of the reviewed payoff.');
   const baseCommit = workerInput.baseline.sourceCommit;
-  const actualCommit = (await runChecked('git', ['rev-parse', `${baseCommit}^{commit}`], { cwd: playablesRoot })).trim();
-  const actualTree = (await runChecked('git', ['rev-parse', `${baseCommit}:${baseline.sourcePath}`], { cwd: playablesRoot })).trim();
+  const actualCommit = (await runTrustedGit(['rev-parse', `${baseCommit}^{commit}`], { cwd: playablesRoot })).trim();
+  const actualTree = (await runTrustedGit(['rev-parse', `${baseCommit}:${baseline.sourcePath}`], { cwd: playablesRoot })).trim();
   if (baseline.sourceCommit !== workerInput.baseline.sourceCommit
     || baseline.sourceTree !== workerInput.baseline.sourceTree
     || actualCommit !== baseCommit || actualTree !== workerInput.baseline.sourceTree) {
@@ -645,21 +790,25 @@ try {
   worktree = mkdtempSync(path.join(tmpdir(), 'swipe-wild-sort-'));
   rmSync(worktree, { recursive: true, force: true });
   status('fork', 'Restoring the exact reviewed parent experiment in an isolated fork');
-  await runChecked('git', ['clone', '--shared', '--no-checkout', playablesRoot, worktree], { cwd: workspace, timeoutMs: 60000 });
-  await runChecked('git', ['checkout', '--detach', baseCommit], { cwd: worktree, timeoutMs: 60000 });
-  const cloneHead = (await runChecked('git', ['rev-parse', 'HEAD'], { cwd: worktree })).trim();
+  await runTrustedGit(['clone', '--shared', '--no-checkout', playablesRoot, worktree], { cwd: workspace, timeoutMs: 60000 });
+  await runTrustedGit(['checkout', '--detach', baseCommit], { cwd: worktree, timeoutMs: 60000 });
+  const cloneHead = (await runTrustedGit(['rev-parse', 'HEAD'], { cwd: worktree })).trim();
   if (cloneHead !== baseCommit) fail('disposable clone did not resolve the pinned baseline commit');
   const dependencies = path.join(playablesRoot, 'node_modules');
   if (!existsSync(dependencies)) fail('playables/node_modules is missing; run npm ci before starting the local lab');
   symlinkSync(dependencies, path.join(worktree, 'node_modules'), 'dir');
+  const trustedDependencies = captureTrustedDependencyTarget(dependencies);
+  assertTrustedDependencyLink(worktree, trustedDependencies);
   // Apply ONLY the captured closure bytes from a path this process owns —
   // the parent pathname is never re-opened after verification.
   const capturedPatch = path.join(worktree, '.parent-closure.patch');
   writeFileSync(capturedPatch, parent.patchBytes);
-  await runChecked('git', ['apply', '--whitespace=nowarn', capturedPatch], { cwd: worktree });
+  await runTrustedGit(['apply', '--whitespace=nowarn', capturedPatch], { cwd: worktree });
   rmSync(capturedPatch, { force: true });
+  await normalizeIndexFlags(worktree);
+  const integrity = { git: captureGitMetadata(worktree), dependencies: trustedDependencies };
   status('typecheck-baseline', 'Recording pre-existing diagnostics so only new errors consume the experiment budget');
-  const baselineDiagnostics = new Set((await collectTypeDiagnostics(worktree)).map(normalizeDiagnostic));
+  const baselineDiagnostics = new Set((await collectTypeDiagnostics(worktree, integrity)).map(normalizeDiagnostic));
 
   // Exact worker contract: one physical model invocation, then one honest
   // gate pass. There is no internal repair loop and no soft success — an
@@ -668,16 +817,18 @@ try {
   let playtestRuns = 0;
   const remainingMs = experimentStartedAt + TOTAL_TIMEOUT_MS - Date.now();
   if (remainingMs < 300000) throw new Error('EXPERIMENT DEADLINE: the 24-hour job budget is exhausted');
+  status('auth', `Verifying ${provider} subscription login`);
+  await assertSubscriptionAuth();
   const agentSummary = await invokeAgent(worktree, Math.min(AGENT_TIMEOUT_MS, remainingMs));
   status('safety', 'Checking the code sandbox and patch budget', 1);
-  const validated = await validateDiff(worktree, baseCommit);
+  const validated = await validateDiff(worktree, baseCommit, integrity);
   if (validated.patch === parent.patchBytes.toString('utf8')) {
     const unchanged = new Error('TUNING FAILED: the agent did not change the parent experiment');
     unchanged.code = 'tuning_unchanged';
     throw unchanged;
   }
-  await typecheck(worktree, validated.files, baselineDiagnostics, 1);
-  await build(worktree, 1);
+  await typecheck(worktree, validated.files, baselineDiagnostics, 1, integrity);
+  await build(worktree, 1, integrity);
   const artifactHtml = selfContainedArtifact(worktree);
   const conformanceResult = await conformance(artifactHtml, 1);
   let autoplayMetrics;
@@ -698,6 +849,7 @@ try {
     conformanceMetrics: conformanceResult.metrics,
     autoplayMetrics,
   });
+  await assertWorktreeIntegrity(worktree, integrity);
   status('publish', 'Autoplay won; saving the local experiment', 1);
   const published = publishCandidate({
     patch: validated.patch,
