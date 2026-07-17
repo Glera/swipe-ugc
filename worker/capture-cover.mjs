@@ -40,6 +40,14 @@ try {
     const artifact = path.join(artifactRoot, `${id}.html`);
     const manifestPath = path.join(localRoot, `${id}.json`);
     if (!existsSync(artifact) || !existsSync(manifestPath)) continue;
+    // Typed worker results are content-addressed: the committed cover is part
+    // of the artifact identity and the manifest is digest-sealed. Re-capturing
+    // would silently break both, so those candidates are immutable here.
+    const committed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (committed?.schema === 'ugc.experiment-worker-result.v1') {
+      console.log(`[cover] ${id}: skipped (content-addressed typed result is immutable)`);
+      continue;
+    }
     const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
     const errors = [];
     const externalAttempts = [];

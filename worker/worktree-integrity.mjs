@@ -8,8 +8,9 @@ import {
 } from 'fs';
 import path from 'path';
 
-// These are the pieces of repository state that can change what HEAD, status,
-// or diff means without leaving an ordinary working-tree change behind.
+// Repository state that can change what HEAD/status/diff mean without leaving
+// an ordinary working-tree change. The agent must not be able to rewrite any
+// of these between validation and publication.
 const PROTECTED_GIT_PATHS = [
   'HEAD',
   'config',
@@ -105,9 +106,7 @@ export function assertTrustedDependencyLink(worktree, trustedDependencies) {
     throw new Error('agent redirected node_modules away from the trusted dependency tree');
   }
   const current = lstatSync(trusted.realpath);
-  if (!current.isDirectory()) {
-    throw new Error('trusted node_modules target is not a directory');
-  }
+  if (!current.isDirectory()) throw new Error('trusted node_modules target is not a directory');
   if (current.dev !== trusted.device || current.ino !== trusted.inode) {
     throw new Error('trusted node_modules target was replaced during the experiment');
   }
@@ -129,8 +128,6 @@ export function indexFlagClearCommands(files, batchSize = 200) {
   const commands = [];
   for (let offset = 0; offset < files.length; offset += batchSize) {
     const batch = files.slice(offset, offset + batchSize);
-    // Git 2.17 treats these as separate index actions; combining both options
-    // in one invocation leaves skip-worktree set.
     commands.push(['update-index', '--no-assume-unchanged', '--', ...batch]);
     commands.push(['update-index', '--no-skip-worktree', '--', ...batch]);
   }
