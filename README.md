@@ -114,6 +114,13 @@ the immutable Render URL. The source patch remains ignored and no `playables`
 file is copied or committed. Model execution still happens only through the
 local subscription; publication does not call the Anthropic API.
 
+The standalone generator lab can fan out provider-pinned experiment batches and
+pass one frozen preference-memory snapshot into every child worker. This worker
+stores the snapshot SHA-256 in the local manifest; private review text remains
+under `swipe-generator/.data/lab`. Before editing a fork, it re-checks that
+Claude is authenticated through first-party `claude.ai` or Codex through
+ChatGPT and fails closed instead of falling back to developer API credentials.
+
 ### Env
 
 | Var | Meaning |
