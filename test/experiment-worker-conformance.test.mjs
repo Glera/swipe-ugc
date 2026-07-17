@@ -151,12 +151,25 @@ test('feedback and canonical JSON retain exact frozen semantics', () => {
 });
 
 test('worker source retains one provider invocation and no parallel CLI authority', () => {
-  const source = readFileSync(path.join(here, '..', 'worker', 'experiment.mjs'), 'utf8');
+  const source = readFileSync(path.join(here, '..', 'worker', 'experiment-rework.mjs'), 'utf8');
   assert.equal((source.match(/await invokeAgent\(/g) || []).length, 1);
   assert.ok(!source.includes('MAX_ATTEMPTS'));
   assert.ok(source.includes("new Set(['input-digest', 'input-envelope'])"));
   assert.ok(source.includes('loadWorkerInputEnvelope'));
   assert.ok(!/args\.(?:provider|model|feedback|parent|baseline|concept|prompt)/.test(source));
+});
+
+test('legacy experiment entrypoint remains byte-pinned to the live free-argument worker', () => {
+  const legacy = readFileSync(path.join(here, '..', 'worker', 'experiment.mjs'));
+  assert.equal(
+    createHash('sha256').update(legacy).digest('hex'),
+    '6611825db64308942d22aa8396bee1a9feed58568e32c3f3f65278db312550d4',
+  );
+  const source = legacy.toString('utf8');
+  assert.ok(source.includes('const provider = args.provider'));
+  assert.ok(source.includes('const feedback = String(args.feedback'));
+  assert.ok(source.includes('MAX_ATTEMPTS'));
+  assert.ok(!source.includes('loadWorkerInputEnvelope'));
 });
 
 test('typed publisher derives autoplay seed from the verified worker envelope', () => {

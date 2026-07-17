@@ -64,14 +64,22 @@ mounts the release `playables` checkout.
 
 The third/high-cost candidate is deliberately dev-only. A separate persistent
 `swipe-generator` service asks a local Claude Code or Codex subscription for
-three concepts, then starts `worker/experiment.mjs` for the selected one. Every
-job names a baseline in `generator/baselines.json`; the worker resolves that
+three concepts, then starts the legacy `worker/experiment.mjs` for an original
+experiment or the exact `worker/experiment-rework.mjs` for a reviewed rework.
+The paths are intentionally separate: the live legacy runner keeps its current
+free-argument contract, while the exact rework worker accepts only its signed
+input envelope and cannot be selected accidentally by that runner. Every job
+names a baseline in `generator/baselines.json`; the worker resolves that
 exact commit and verifies its exact tree before creating a disposable detached
 clone with its own refs and object store. It never uses a branch or
 `playables/HEAD`, and it never commits or pushes to `playables`. The agent can
 touch only `marble-sort-swipe/src/*.ts` in that disposable clone and has no
-network access. The outer worker rejects a changed clone `HEAD`, forbidden
-paths/capabilities/dependencies, patches smaller than 20 changed lines, new
+network access. The exact rework worker captures the full candidate patch and
+then creates a second, non-shared clone from the pinned commit. Typecheck,
+build, conformance, and autoplay run only in that gate clone after its diff
+replays the captured bytes exactly; delayed writes in the authoring checkout
+cannot enter evidence. The outer worker rejects a changed clone `HEAD`,
+forbidden paths/capabilities/dependencies, patches smaller than 20 changed lines, new
 TypeScript diagnostics in changed files, oversized payloads, build failures,
 and runtime/security conformance failures. The self-contained artifact receives
 a network-deny CSP and Playwright aborts every non-local request. Browser checks

@@ -3,7 +3,7 @@
  * Publish one successful local experiment without touching the playable source.
  *
  * The input is an ignored, self-contained HTML artifact produced by
- * experiment.mjs. This worker retests it in a sandbox, creates a detached
+ * experiment-rework.mjs. This worker retests it in a sandbox, creates a detached
  * swipe-ugc worktree from origin, commits only HTML + public metadata, pushes,
  * and optionally waits for the immutable Render URL to become live.
  */

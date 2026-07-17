@@ -30,7 +30,7 @@ import {
 import { parseExperimentWorkerTerminal } from '../../swipe-generator/src/experiment-worker-evidence.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const workerScript = path.join(here, '..', 'worker', 'experiment.mjs');
+const workerScript = path.join(here, '..', 'worker', 'experiment-rework.mjs');
 const golden = JSON.parse(readFileSync(path.resolve(
   here, '..', '..', 'swipe-generator', 'test', 'fixtures',
   'experiment-worker-wire-v1.golden.json',

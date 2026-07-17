@@ -9,12 +9,14 @@ const files = [
   'worker/bake.mjs',
   'worker/capture-cover.mjs',
   'worker/experiment.mjs',
+  'worker/experiment-rework.mjs',
   'worker/model-invocation.mjs',
   'worker/result-contract.mjs',
   'worker/publish-local.mjs',
   'worker/publish-experiment.mjs',
   'worker/test-preview.mjs',
   'worker/worktree-integrity.mjs',
+  'worker/sealed-gate-clone.mjs',
 ];
 
 for (const file of files) {
