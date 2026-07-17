@@ -12,6 +12,7 @@ const files = [
   'worker/model-invocation.mjs',
   'worker/publish-experiment.mjs',
   'worker/test-preview.mjs',
+  'worker/worktree-integrity.mjs',
 ];
 
 for (const file of files) {
