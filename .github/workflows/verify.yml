@@ -1,0 +1,33 @@
+name: swipe-ugc CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swipe-ugc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      # Exact chromium revision is pinned by playwright@1.59.1 in the lockfile.
+      - run: npx playwright install --with-deps chromium
+      # backend drift check (content-identity-vectors) self-skips without
+      # swipe-backend present; this is a deliberate self-contained choice.
+      - run: npm run verify
