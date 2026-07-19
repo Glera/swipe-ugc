@@ -103,7 +103,13 @@ conflict). Rework execution accepts only a bounded, hardened
 `--input-envelope <absolute-path> --input-digest sha256:…` pair using
 `lab.experiment-worker-input.v1`; request/attempt/job/receipt, provider/model,
 effort, parent closure, baseline, gate version and test seed are derived only
-from that server-owned envelope. Parallel CLI overrides fail closed. Reviewer
+from that envelope. A reviewed pre-contract parent may bootstrap the first
+exact rework only through the same server-owned closure: its canonical legacy
+manifest plus patch/HTML/cover digests and baseline identity are all bound in
+the signed input and replayed from captured bytes. Unknown schemas are rejected;
+the derived candidate never inherits the legacy verdict and must emit the
+current typed RESULT after every current gate passes.
+Parallel CLI overrides fail closed. Reviewer
 feedback is exact 1..2000 printable characters, and the durable attempt UUID
 is embedded untruncated in the candidate id. Repair/rework cycles
 belong to the generator job layer, not to the worker. A living, silent agent

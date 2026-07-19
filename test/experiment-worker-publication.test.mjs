@@ -152,6 +152,62 @@ t('parent closure is server-evidence-bound and refuses swapped pathnames', () =>
   }
 });
 
+t('server-owned artifact evidence admits an exact legacy parent without treating it as a typed RESULT', () => {
+  const { base, localRoot, artifactRoot } = tempRoots();
+  try {
+    mkdirSync(localRoot, { recursive: true });
+    mkdirSync(artifactRoot, { recursive: true });
+    const id = 'legacy-parent-1234';
+    const patchBytes = Buffer.from('diff --git a/marble-sort-swipe/src/main.ts b/marble-sort-swipe/src/main.ts\n+legacy parent\n');
+    const htmlBytes = Buffer.from('<!doctype html><title>legacy parent</title>');
+    const coverBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const manifest = {
+      id,
+      parentId: null,
+      baselineId: golden.input.baseline.id,
+      baselineTree: golden.input.baseline.sourceTree,
+      provider: 'claude',
+      baseCommit: golden.input.baseline.sourceCommit,
+      title: 'Legacy reviewed parent',
+      autoplayPassed: true,
+    };
+    const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(path.join(localRoot, `${id}.json`), manifestBytes);
+    writeFileSync(path.join(localRoot, `${id}.patch`), patchBytes);
+    writeFileSync(path.join(artifactRoot, `${id}.html`), htmlBytes);
+    writeFileSync(path.join(artifactRoot, `${id}.cover.png`), coverBytes);
+    const expectedArtifact = {
+      schema: 'lab.experiment-artifact-identity.v1',
+      experimentId: id,
+      baselineId: manifest.baselineId,
+      baseCommit: manifest.baseCommit,
+      baselineTree: manifest.baselineTree,
+      manifestSha256: sha256Hex(manifestBytes),
+      patchSha256: sha256Hex(patchBytes),
+      htmlSha256: sha256Hex(htmlBytes),
+      coverSha256: sha256Hex(coverBytes),
+    };
+
+    const closure = loadParentClosure({ localRoot, artifactRoot, expectedArtifact });
+    assert.deepEqual(closure.manifest, manifest);
+    assert.deepEqual(closure.patchBytes, patchBytes);
+
+    const unknown = { ...manifest, schema: 'ugc.untrusted-parent.v1' };
+    const unknownBytes = Buffer.from(`${JSON.stringify(unknown, null, 2)}\n`);
+    writeFileSync(path.join(localRoot, `${id}.json`), unknownBytes);
+    assert.throws(
+      () => loadParentClosure({
+        localRoot,
+        artifactRoot,
+        expectedArtifact: { ...expectedArtifact, manifestSha256: sha256Hex(unknownBytes) },
+      }),
+      (error) => error.code === 'parent_closure_mismatch',
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 t('input envelope requires one canonical no-duplicate-key byte representation', () => {
   const base = mkdtempSync(path.join(tmpdir(), 'worker-envelope-'));
   try {

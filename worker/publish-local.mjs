@@ -173,9 +173,29 @@ export function loadWorkerInputEnvelope({ inputPath, expectedInputDigest }) {
   return input;
 }
 
-// Full parent closure: the manifest must be a verified typed result and the
-// captured patch/html/cover bytes must replay its artifact identity. The
-// returned patch bytes are the ONLY bytes a caller may apply.
+function parentManifestKind(manifest, parentId) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+    || manifest.id !== parentId) {
+    throw contractError('parent_closure_mismatch', 'parent manifest id does not match its pathname');
+  }
+  if (manifest.schema === 'ugc.experiment-worker-result.v1') return 'typed';
+  // Historical experiment manifests predate the signed RESULT schema. They
+  // are admitted only as exact server-owned artifact bytes: the signed worker
+  // input binds their manifest/patch/html/cover digests and baseline identity.
+  // An unknown schema is never treated as legacy, and legacy bytes cannot
+  // impersonate a partially typed RESULT.
+  if (manifest.schema === undefined && manifest.resultDigest === undefined
+    && manifest.inputDigest === undefined && manifest.artifact === undefined) {
+    return 'server_bound_legacy';
+  }
+  throw contractError('parent_closure_mismatch', 'parent manifest schema is not an accepted parent format');
+}
+
+// Full parent closure: a typed result or an exact server-bound legacy
+// manifest is captured once, and patch/html/cover bytes must replay the
+// server-owned artifact identity. The returned patch bytes are the ONLY bytes
+// a caller may apply. Legacy admission does not create or inherit a verdict;
+// the new candidate still emits the current typed RESULT and reruns every gate.
 export function loadParentClosure({ localRoot, artifactRoot, expectedArtifact }) {
   const parentId = expectedArtifact?.experimentId;
   if (typeof parentId !== 'string') {
@@ -198,9 +218,7 @@ export function loadParentClosure({ localRoot, artifactRoot, expectedArtifact })
   if (sha256Hex(manifestBytes) !== expectedArtifact.manifestSha256) {
     throw contractError('parent_closure_mismatch', 'parent manifest differs from server-owned evidence');
   }
-  if (manifest?.schema !== 'ugc.experiment-worker-result.v1' || manifest.id !== parentId) {
-    throw contractError('parent_closure_mismatch', 'parent manifest id does not match its pathname');
-  }
+  const manifestKind = parentManifestKind(manifest, parentId);
   const patchBytes = readFileExact(
     path.join(localRoot, `${parentId}.patch`),
     'parent patch',
@@ -222,7 +240,8 @@ export function loadParentClosure({ localRoot, artifactRoot, expectedArtifact })
     coverSha256: sha256Hex(coverBytes),
   };
   for (const [key, digest] of Object.entries(observed)) {
-    if (expectedArtifact[key] !== digest || manifest.artifact?.[key] !== digest) {
+    if (expectedArtifact[key] !== digest
+      || (manifestKind === 'typed' && manifest.artifact?.[key] !== digest)) {
       throw contractError(
         'parent_closure_mismatch',
         `parent ${key} does not replay the captured bytes`,
