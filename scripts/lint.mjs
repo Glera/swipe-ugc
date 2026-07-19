@@ -17,6 +17,7 @@ const files = [
   'worker/test-preview.mjs',
   'worker/worktree-integrity.mjs',
   'worker/sealed-gate-clone.mjs',
+  'test/fixtures/experiment-rework-success-worker.mjs',
 ];
 
 for (const file of files) {
