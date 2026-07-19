@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,18 @@ import {
 } from '../worker/result-contract.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// The wire golden (and in the publication tests, the terminal parser) are
+// owned by the private swipe-generator repo. Standalone CI cannot check it
+// out, so these cross-repo contract tests run wherever the two repos sit side
+// by side: developer machines and the generator-side CI, which checkouts the
+// public swipe-ugc at a pinned ref. Skip honestly instead of crashing at
+// import time.
+const SIBLING_GENERATOR = path.resolve(here, '..', '..', 'swipe-generator');
+const SIBLING_SKIP = existsSync(SIBLING_GENERATOR)
+  ? false
+  : 'sibling swipe-generator absent (private repo, not checked out in standalone CI)';
+const t = (name, fn) => test(name, { skip: SIBLING_SKIP }, fn);
+
 const goldenPath = path.resolve(
   here,
   '..',
@@ -30,8 +42,8 @@ const goldenPath = path.resolve(
   'fixtures',
   'experiment-worker-wire-v1.golden.json',
 );
-const goldenBytes = readFileSync(goldenPath);
-const golden = JSON.parse(goldenBytes.toString('utf8'));
+const goldenBytes = SIBLING_SKIP ? null : readFileSync(goldenPath);
+const golden = SIBLING_SKIP ? null : JSON.parse(goldenBytes.toString('utf8'));
 
 function runtimeFields(result = golden.result) {
   const { feedback: _feedback, ...concept } = result.concept;
@@ -64,7 +76,7 @@ function resignFailure(mutate) {
   return { ...body, failureDigest: digestOf(body) };
 }
 
-test('one generator-owned golden freezes contract, input, RESULT, ERROR and redaction', () => {
+t('one generator-owned golden freezes contract, input, RESULT, ERROR and redaction', () => {
   assert.equal(
     createHash('sha256').update(goldenBytes).digest('hex'),
     '7f6a06c0365d012664d933ef9d6836935ac6172f95fe7c69f22f13f730bf078c',
@@ -89,7 +101,7 @@ test('one generator-owned golden freezes contract, input, RESULT, ERROR and reda
   }
 });
 
-test('public contract definition is recursively frozen and clones verifier key arrays', () => {
+t('public contract definition is recursively frozen and clones verifier key arrays', () => {
   const assertDeepFrozen = (value) => {
     if (!value || typeof value !== 'object') return;
     assert.equal(Object.isFrozen(value), true);
@@ -114,7 +126,7 @@ test('public contract definition is recursively frozen and clones verifier key a
   assert.deepEqual(verifyWorkerResult(golden.result, golden.input), golden.result);
 });
 
-test('input and output bindings fail closed under re-signing', () => {
+t('input and output bindings fail closed under re-signing', () => {
   for (const mutate of [
     (body) => { body.attemptUid = '10000000-0000-4000-8000-000000000099'; },
     (body) => { body.jobId = '10000000-0000-4000-8000-000000000099'; },
@@ -130,7 +142,7 @@ test('input and output bindings fail closed under re-signing', () => {
   }
 });
 
-test('failure re-signing and secret-bearing fixed points are rejected', () => {
+t('failure re-signing and secret-bearing fixed points are rejected', () => {
   for (const mutate of [
     (body) => { body.requestId = '10000000-0000-4000-8000-000000000099'; },
     (body) => { body.code = 'Not-Snake-Case'; },
@@ -140,7 +152,7 @@ test('failure re-signing and secret-bearing fixed points are rejected', () => {
   }
 });
 
-test('feedback and canonical JSON retain exact frozen semantics', () => {
+t('feedback and canonical JSON retain exact frozen semantics', () => {
   const long = 'x'.repeat(FEEDBACK_MAX);
   assert.equal(validateExperimentFeedback(long), long);
   assert.throws(() => validateExperimentFeedback(` ${long.slice(1)}`), /printable/);
@@ -150,7 +162,7 @@ test('feedback and canonical JSON retain exact frozen semantics', () => {
   assert.equal(canonicalJson(forward), canonicalJson(reordered));
 });
 
-test('worker source retains one provider invocation and no parallel CLI authority', () => {
+t('worker source retains one provider invocation and no parallel CLI authority', () => {
   const source = readFileSync(path.join(here, '..', 'worker', 'experiment-rework.mjs'), 'utf8');
   assert.equal((source.match(/await invokeAgent\(/g) || []).length, 1);
   assert.ok(!source.includes('MAX_ATTEMPTS'));
@@ -159,7 +171,7 @@ test('worker source retains one provider invocation and no parallel CLI authorit
   assert.ok(!/args\.(?:provider|model|feedback|parent|baseline|concept|prompt)/.test(source));
 });
 
-test('legacy experiment entrypoint remains byte-pinned to the live free-argument worker', () => {
+t('legacy experiment entrypoint remains byte-pinned to the live free-argument worker', () => {
   const legacy = readFileSync(path.join(here, '..', 'worker', 'experiment.mjs'));
   assert.equal(
     createHash('sha256').update(legacy).digest('hex'),
@@ -172,7 +184,7 @@ test('legacy experiment entrypoint remains byte-pinned to the live free-argument
   assert.ok(!source.includes('loadWorkerInputEnvelope'));
 });
 
-test('typed publisher derives autoplay seed from the verified worker envelope', () => {
+t('typed publisher derives autoplay seed from the verified worker envelope', () => {
   const publisherSource = readFileSync(path.join(here, '..', 'worker', 'publish-experiment.mjs'), 'utf8');
   assert.ok(publisherSource.includes('testSeed = workerInput.worker.testSeed'));
 });

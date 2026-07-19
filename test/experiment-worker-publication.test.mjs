@@ -27,11 +27,28 @@ import {
   sha256Hex,
   verifyWorkerFailure,
 } from '../worker/result-contract.mjs';
-import { parseExperimentWorkerTerminal } from '../../swipe-generator/src/experiment-worker-evidence.mjs';
+import { pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// The wire golden (and in the publication tests, the terminal parser) are
+// owned by the private swipe-generator repo. Standalone CI cannot check it
+// out, so these cross-repo contract tests run wherever the two repos sit side
+// by side: developer machines and the generator-side CI, which checkouts the
+// public swipe-ugc at a pinned ref. Skip honestly instead of crashing at
+// import time.
+const SIBLING_GENERATOR = path.resolve(here, '..', '..', 'swipe-generator');
+const SIBLING_SKIP = existsSync(SIBLING_GENERATOR)
+  ? false
+  : 'sibling swipe-generator absent (private repo, not checked out in standalone CI)';
+const t = (name, fn) => test(name, { skip: SIBLING_SKIP }, fn);
+const { parseExperimentWorkerTerminal } = SIBLING_SKIP
+  ? { parseExperimentWorkerTerminal: null }
+  : await import(pathToFileURL(path.join(
+    SIBLING_GENERATOR, 'src', 'experiment-worker-evidence.mjs',
+  )).href);
+
 const workerScript = path.join(here, '..', 'worker', 'experiment-rework.mjs');
-const golden = JSON.parse(readFileSync(path.resolve(
+const golden = SIBLING_SKIP ? null : JSON.parse(readFileSync(path.resolve(
   here, '..', '..', 'swipe-generator', 'test', 'fixtures',
   'experiment-worker-wire-v1.golden.json',
 ), 'utf8'));
@@ -83,7 +100,7 @@ function expectedArtifact(result, localRoot) {
   };
 }
 
-test('publication is append-only with identical replay and typed conflict', () => {
+t('publication is append-only with identical replay and typed conflict', () => {
   const { base, localRoot, artifactRoot } = tempRoots();
   try {
     const first = publishExperimentResult({ localRoot, artifactRoot, ...candidate() });
@@ -113,7 +130,7 @@ test('publication is append-only with identical replay and typed conflict', () =
   }
 });
 
-test('parent closure is server-evidence-bound and refuses swapped pathnames', () => {
+t('parent closure is server-evidence-bound and refuses swapped pathnames', () => {
   const { base, localRoot, artifactRoot } = tempRoots();
   try {
     const parent = publishExperimentResult({ localRoot, artifactRoot, ...candidate() });
@@ -135,7 +152,7 @@ test('parent closure is server-evidence-bound and refuses swapped pathnames', ()
   }
 });
 
-test('input envelope requires one canonical no-duplicate-key byte representation', () => {
+t('input envelope requires one canonical no-duplicate-key byte representation', () => {
   const base = mkdtempSync(path.join(tmpdir(), 'worker-envelope-'));
   try {
     const root = path.join(base, 'root');
@@ -191,7 +208,7 @@ test('input envelope requires one canonical no-duplicate-key byte representation
   }
 });
 
-test('real interprocess race commits one immutable candidate', async () => {
+t('real interprocess race commits one immutable candidate', async () => {
   const { base, localRoot, artifactRoot } = tempRoots();
   const script = path.join(base, 'publish-once.mjs');
   writeFileSync(script, [
@@ -240,7 +257,7 @@ function runWorker(argv) {
   });
 }
 
-test('command emits bound typed ERROR on stdout accepted by the generator parser', () => {
+t('command emits bound typed ERROR on stdout accepted by the generator parser', () => {
   const base = mkdtempSync(path.join(tmpdir(), 'worker-command-'));
   const repoLocal = path.join(here, '..', '.local-experiments');
   const before = existsSync(repoLocal) ? readdirSync(repoLocal).sort() : null;
