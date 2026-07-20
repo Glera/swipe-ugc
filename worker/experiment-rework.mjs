@@ -6,8 +6,10 @@
  * clone pinned to an exact commit/tree. The release checkout and its refs are
  * never writable by the agent. This process validates the diff, type-checks new
  * diagnostics, builds with the known toolchain, injects a network-deny CSP, and
- * runs browser conformance. Incomplete or unproven evidence is a typed,
- * non-zero failure; publication repeats the strict autoplay WIN gate.
+ * runs browser conformance. Incomplete evidence or any real gate failure is a
+ * typed, non-zero failure; a runtime-safe build that only fails to prove a
+ * fixed-seed autoplay WIN in budget is instead a marked RESULT
+ * (autoplayOutcome.proven=false). Publication stays strictly WIN-only.
  */
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
@@ -712,7 +714,7 @@ async function autoplayWithFlakeRetry(html, attempt, onRun) {
   }
 }
 
-function publishCandidate({ patch, files, agentSummary, html, coverPng, metrics }) {
+function publishCandidate({ patch, files, agentSummary, html, coverPng, autoplayOutcome, metrics }) {
   assertHardenedExperimentHtml(html);
   return publishExperimentResult({
     localRoot,
@@ -729,7 +731,10 @@ function publishCandidate({ patch, files, agentSummary, html, coverPng, metrics 
         mechanic,
         feeling,
       },
-      autoplayPassed: true,
+      // autoplayPassed always mirrors the honest outcome; an unproven candidate
+      // carries proven:false and no win metrics, a proven one keeps the WIN.
+      autoplayPassed: autoplayOutcome.proven,
+      autoplayOutcome,
       wallTimeMs: Date.now() - experimentStartedAt,
       agentInvocations: metrics.agentInvocations,
       playtestRuns: metrics.playtestRuns,
@@ -889,32 +894,40 @@ try {
   await build(candidateGate.worktree, 1, candidateGate.integrity);
   const artifactHtml = selfContainedArtifact(candidateGate.worktree);
   const conformanceResult = await conformance(artifactHtml, 1);
-  let autoplayMetrics;
+  // Operator decision: a runtime-safe candidate that clears every other gate but
+  // simply fails to prove a fixed-seed autoplay WIN inside its budget must reach
+  // review with a mark, not die as an ERROR. Only the unproven WIN is relaxed —
+  // any other autoplay failure (CSP, network, runtime crash, degenerate win,
+  // perf) is thrown by autoplay() as a plain Error and stays a typed ERROR here.
+  const budgetSeconds = Math.round(TEST_TIMEOUT_MS / 1000);
+  let autoplayMetrics = null;
+  let autoplayOutcome;
   try {
     const playtest = await autoplayWithFlakeRetry(artifactHtml, 1, () => { playtestRuns++; });
     autoplayMetrics = playtest.result;
+    autoplayOutcome = { proven: true, reason: 'win_proven', budgetSeconds, runs: playtestRuns };
   } catch (error) {
-    if (error instanceof AutoplayIncompleteError) {
-      error.code = 'autoplay_unproven';
-    }
-    throw error;
+    if (!(error instanceof AutoplayIncompleteError)) throw error;
+    autoplayOutcome = { proven: false, reason: 'budget_exhausted', budgetSeconds, runs: playtestRuns };
+    status('autoplay-unproven', `Build is healthy but autoplay could not prove a WIN within ${budgetSeconds}s; delivering a marked candidate for review`, 1);
   }
   assertCompleteEvidence({
     validated,
     artifactHtml,
     coverPng: conformanceResult.coverPng,
-    autoplayPassed: true,
+    autoplayOutcome,
     conformanceMetrics: conformanceResult.metrics,
     autoplayMetrics,
   });
   await assertWorktreeIntegrity(candidateGate.worktree, candidateGate.integrity);
-  status('publish', 'Autoplay won; saving the local experiment', 1);
+  status('publish', autoplayOutcome.proven ? 'Autoplay won; saving the local experiment' : 'Saving the marked unproven candidate', 1);
   const published = publishCandidate({
     patch: sealedValidated.patch,
     files: sealedValidated.files,
     agentSummary,
     html: artifactHtml,
     coverPng: conformanceResult.coverPng,
+    autoplayOutcome,
     metrics: {
       agentInvocations: 1,
       playtestRuns,

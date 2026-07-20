@@ -36,26 +36,33 @@ const PARENT_ARTIFACT_KEYS = [
 ];
 const RESULT_KEYS = [
   'agentInvocations', 'agentSummary', 'artifact', 'attemptUid', 'autoplay',
-  'autoplayPassed', 'baseCommit', 'baselineId', 'baselineTree', 'concept',
-  'conformance', 'coverBytes', 'coverUrl', 'createdAt', 'effort', 'files',
-  'gateVersion', 'id', 'inputDigest', 'jobId', 'model',
-  'modelExecutionReceiptId', 'parent', 'playtestRuns', 'provider', 'requestId',
-  'resultDigest', 'schema', 'testSeed', 'title', 'url', 'wallTimeMs',
-  'workerContractDigest',
+  'autoplayOutcome', 'autoplayPassed', 'baseCommit', 'baselineId',
+  'baselineTree', 'concept', 'conformance', 'coverBytes', 'coverUrl',
+  'createdAt', 'effort', 'files', 'gateVersion', 'id', 'inputDigest', 'jobId',
+  'model', 'modelExecutionReceiptId', 'parent', 'playtestRuns', 'provider',
+  'requestId', 'resultDigest', 'schema', 'testSeed', 'title', 'url',
+  'wallTimeMs', 'workerContractDigest',
 ];
 const RESULT_PARENT_KEYS = ['experimentId', 'parentArtifactDigest', 'parentReviewDigest'];
 const ARTIFACT_KEYS = ['baseCommit', 'baselineId', 'baselineTree', 'coverSha256', 'htmlSha256', 'patchSha256'];
 const CONCEPT_KEYS = ['feedback', 'feeling', 'mechanic', 'pitch', 'prompt'];
 const CONFORMANCE_KEYS = ['idleMs', 'rafFrames'];
 const AUTOPLAY_KEYS = ['durationMs', 'rafFrames', 'runNumber', 'visualStates'];
+// A rework candidate can be runtime-safe with every other gate green yet still
+// exhaust its fixed-seed autoplay budget without proving a WIN. That outcome is
+// a first-class, honestly-marked RESULT (never an ERROR): proven=false keeps the
+// candidate reviewable while publication stays strictly WIN-only.
+const AUTOPLAY_OUTCOME_KEYS = ['budgetSeconds', 'proven', 'reason', 'runs'];
+const AUTOPLAY_OUTCOME_REASONS = ['budget_exhausted', 'win_proven'];
+const AUTOPLAY_BUDGET_SECONDS = [30, 3600];
 const FAILURE_KEYS = [
   'attemptUid', 'code', 'failureDigest', 'inputDigest', 'jobId', 'message',
   'model', 'modelExecutionReceiptId', 'provider', 'requestId', 'schema',
 ];
 const RUNTIME_RESULT_KEYS = [
-  'agentInvocations', 'agentSummary', 'artifact', 'autoplay', 'autoplayPassed',
-  'concept', 'conformance', 'coverBytes', 'createdAt', 'files', 'playtestRuns',
-  'title', 'wallTimeMs',
+  'agentInvocations', 'agentSummary', 'artifact', 'autoplay', 'autoplayOutcome',
+  'autoplayPassed', 'concept', 'conformance', 'coverBytes', 'createdAt', 'files',
+  'playtestRuns', 'title', 'wallTimeMs',
 ];
 
 export function contractError(code, message) {
@@ -131,6 +138,7 @@ export const EXPERIMENT_WORKER_CONTRACT_DEFINITION = deepFreeze({
     concept: [...CONCEPT_KEYS],
     conformance: [...CONFORMANCE_KEYS],
     autoplay: [...AUTOPLAY_KEYS],
+    autoplayOutcome: [...AUTOPLAY_OUTCOME_KEYS],
     failure: [...FAILURE_KEYS],
   },
   bounds: {
@@ -140,6 +148,7 @@ export const EXPERIMENT_WORKER_CONTRACT_DEFINITION = deepFreeze({
     playtestRuns: [1, 2],
     autoplayRunNumber: [1, 2],
     autoplayVisualStatesMin: 2,
+    autoplayBudgetSeconds: [...AUTOPLAY_BUDGET_SECONDS],
     testSeed: [0, 0xffff_ffff],
     files: [1, 200],
   },
@@ -148,7 +157,13 @@ export const EXPERIMENT_WORKER_CONTRACT_DEFINITION = deepFreeze({
   redactionVersion: 'model-evidence-sanitizer.v2',
   redactedFields: ['agentSummary', 'failure.message'],
   testSeedBinding: 'input.worker.testSeed=result.testSeed',
-  evidenceRelations: ['playtestRuns=autoplay.runNumber'],
+  autoplayOutcomeReasons: [...AUTOPLAY_OUTCOME_REASONS],
+  evidenceRelations: [
+    'autoplayPassed=autoplayOutcome.proven',
+    'playtestRuns=autoplayOutcome.runs',
+    'proven:autoplay.runNumber=playtestRuns',
+    'unproven:autoplay=null',
+  ],
 });
 
 export const EXPERIMENT_WORKER_CONTRACT_DIGEST = digestOf(
@@ -288,6 +303,46 @@ function validateMetrics(value, keys, label) {
   }
 }
 
+// Validates the honest autoplay evidence for a RESULT. A proven WIN keeps the
+// full win metrics; an unproven candidate (budget exhausted on a healthy build)
+// carries autoplay=null and a marked outcome. autoplayPassed always mirrors
+// autoplayOutcome.proven so no consumer can read one without the other.
+function validateAutoplayEvidence(body) {
+  exactKeys(body.autoplayOutcome, AUTOPLAY_OUTCOME_KEYS, 'autoplayOutcome');
+  const outcome = body.autoplayOutcome;
+  if (typeof outcome.proven !== 'boolean' || !AUTOPLAY_OUTCOME_REASONS.includes(outcome.reason)) {
+    throw contractError('experiment_worker_result_invalid', 'autoplayOutcome proven/reason is invalid');
+  }
+  count(outcome.runs, 'autoplayOutcome.runs', { min: 1, max: 2 });
+  count(outcome.budgetSeconds, 'autoplayOutcome.budgetSeconds', {
+    min: AUTOPLAY_BUDGET_SECONDS[0],
+    max: AUTOPLAY_BUDGET_SECONDS[1],
+  });
+  if (typeof body.autoplayPassed !== 'boolean' || body.autoplayPassed !== outcome.proven) {
+    throw contractError('experiment_worker_result_invalid', 'autoplayPassed differs from autoplayOutcome.proven');
+  }
+  count(body.playtestRuns, 'playtestRuns', { min: 1, max: 2 });
+  if (body.playtestRuns !== outcome.runs) {
+    throw contractError('experiment_worker_result_invalid', 'playtestRuns differs from autoplayOutcome.runs');
+  }
+  if (outcome.proven) {
+    if (outcome.reason !== 'win_proven') {
+      throw contractError('experiment_worker_result_invalid', 'proven autoplay must record reason win_proven');
+    }
+    validateMetrics(body.autoplay, AUTOPLAY_KEYS, 'autoplay');
+    if (body.playtestRuns !== body.autoplay.runNumber) {
+      throw contractError('experiment_worker_result_invalid', 'playtestRuns differs from autoplay.runNumber');
+    }
+  } else {
+    if (outcome.reason !== 'budget_exhausted') {
+      throw contractError('experiment_worker_result_invalid', 'unproven autoplay must record reason budget_exhausted');
+    }
+    if (body.autoplay !== null) {
+      throw contractError('experiment_worker_result_invalid', 'unproven autoplay must not carry win metrics');
+    }
+  }
+}
+
 function verifyBoundIdentity(value, input) {
   if (value.inputDigest !== input.inputDigest || value.requestId !== input.request.id
     || value.attemptUid !== input.attempt.id || value.jobId !== input.attempt.jobId
@@ -309,12 +364,12 @@ export function verifyWorkerResult(raw, expectedInput) {
     throw contractError('experiment_worker_result_digest_mismatch', 'worker RESULT digest does not replay');
   }
   verifyBoundIdentity(body, input);
-  if (body.autoplayPassed !== true || body.agentInvocations !== 1
+  if (body.agentInvocations !== 1
     || body.effort !== input.model.effort || body.workerContractDigest !== input.worker.contractDigest
     || body.gateVersion !== input.worker.gateVersion || body.testSeed !== input.worker.testSeed
     || body.baseCommit !== input.baseline.sourceCommit || body.baselineId !== input.baseline.id
     || body.baselineTree !== input.baseline.sourceTree) {
-    throw contractError('experiment_worker_result_invalid', 'worker RESULT contradicts proven execution');
+    throw contractError('experiment_worker_result_invalid', 'worker RESULT contradicts bound execution');
   }
   exactKeys(body.parent, RESULT_PARENT_KEYS, 'worker RESULT parent');
   if (body.parent.experimentId !== input.parent.targetId
@@ -345,12 +400,8 @@ export function verifyWorkerResult(raw, expectedInput) {
     printable(body.concept[key], `concept.${key}`, { min: 0, max, maxBytes: max * 4 });
   }
   validateMetrics(body.conformance, CONFORMANCE_KEYS, 'conformance');
-  validateMetrics(body.autoplay, AUTOPLAY_KEYS, 'autoplay');
+  validateAutoplayEvidence(body);
   count(body.wallTimeMs, 'wallTimeMs');
-  count(body.playtestRuns, 'playtestRuns', { min: 1, max: 2 });
-  if (body.playtestRuns !== body.autoplay.runNumber) {
-    throw contractError('experiment_worker_result_invalid', 'playtestRuns differs from autoplay.runNumber');
-  }
   count(body.coverBytes, 'coverBytes', { min: 1 });
   printable(body.title, 'title', { max: 60, maxBytes: 240 });
   printable(body.agentSummary, 'agentSummary', { min: 0, max: 5000, maxBytes: 20_000 });
@@ -394,6 +445,7 @@ export function buildWorkerResult(runtimeFields, expectedInput) {
     title: runtime.title,
     concept: { ...runtime.concept, feedback: input.request.instruction },
     autoplayPassed: runtime.autoplayPassed,
+    autoplayOutcome: runtime.autoplayOutcome,
     wallTimeMs: runtime.wallTimeMs,
     agentInvocations: runtime.agentInvocations,
     playtestRuns: runtime.playtestRuns,
@@ -472,11 +524,15 @@ export function buildWorkerFailure({ input: expectedInput, code, message }) {
   return verifyWorkerFailure(failure, input);
 }
 
+// Both a proven WIN and a marked-unproven candidate are complete RESULTs, so
+// they share the same evidence floor (patch, artifact, cover, conformance and a
+// well-formed autoplay outcome). Only a proven outcome additionally requires the
+// win metrics; an unproven outcome legitimately carries no autoplay metrics.
 export function assertCompleteEvidence({
   validated,
   artifactHtml,
   coverPng,
-  autoplayPassed,
+  autoplayOutcome,
   conformanceMetrics,
   autoplayMetrics,
 }) {
@@ -485,9 +541,24 @@ export function assertCompleteEvidence({
   if (typeof artifactHtml !== 'string' || !artifactHtml) missing.push('artifact_html');
   if (!coverPng || !coverPng.length) missing.push('cover_png');
   if (!conformanceMetrics) missing.push('conformance_metrics');
-  if (!autoplayMetrics) missing.push('autoplay_metrics');
-  if (autoplayPassed !== true) missing.push('autoplay_win');
+  if (!autoplayOutcome || typeof autoplayOutcome.proven !== 'boolean') missing.push('autoplay_outcome');
+  else if (autoplayOutcome.proven && !autoplayMetrics) missing.push('autoplay_metrics');
   if (missing.length) {
     throw contractError('incomplete_evidence', `worker success requires complete evidence; missing: ${missing.join(', ')}`);
   }
+}
+
+// Publication is strictly WIN-only. A marked-unproven candidate
+// (autoplayOutcome.proven=false) is a legitimate review artifact but must never
+// be published; this fails closed with a typed cause for every publish path.
+export function assertPublishableWin(result) {
+  if (!result || typeof result !== 'object'
+    || result.autoplayPassed !== true
+    || !result.autoplayOutcome || result.autoplayOutcome.proven !== true) {
+    throw contractError(
+      'experiment_publish_unproven',
+      'candidate autoplay WIN is not proven; publication is WIN-only',
+    );
+  }
+  return result;
 }

@@ -23,9 +23,11 @@ import {
   readFileExact,
 } from '../worker/publish-local.mjs';
 import {
+  assertPublishableWin,
   canonicalJson,
   sha256Hex,
   verifyWorkerFailure,
+  verifyWorkerResult,
 } from '../worker/result-contract.mjs';
 import { pathToFileURL } from 'node:url';
 
@@ -70,6 +72,7 @@ function candidate({ suffix = '' } = {}) {
       title: golden.result.title,
       concept,
       autoplayPassed: true,
+      autoplayOutcome: { budgetSeconds: 150, proven: true, reason: 'win_proven', runs: 1 },
       wallTimeMs: 1000,
       agentInvocations: 1,
       playtestRuns: 1,
@@ -84,6 +87,17 @@ function candidate({ suffix = '' } = {}) {
     coverPng: Buffer.from([1, 2, suffix ? 9 : 3]),
     patch: `diff --git a b\n+fixture ${suffix}\n`,
   };
+}
+
+// A runtime-safe rework candidate whose fixed-seed autoplay exhausted its budget
+// without a WIN: a complete, honestly-marked RESULT with no win metrics.
+function unprovenCandidate({ suffix = 'unproven' } = {}) {
+  const item = candidate({ suffix });
+  item.fields.autoplayPassed = false;
+  item.fields.autoplayOutcome = { budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2 };
+  item.fields.playtestRuns = 2;
+  item.fields.autoplay = null;
+  return item;
 }
 
 function expectedArtifact(result, localRoot) {
@@ -300,6 +314,48 @@ t('real interprocess race commits one immutable candidate', async () => {
     assert.equal(new Set(runs.map((item) => item.digest)).size, 1);
     assert.equal(readdirSync(localRoot).filter((name) => name.endsWith('.json')).length, 1);
     assert.equal(readdirSync(localRoot).filter((name) => name.startsWith('.staging-')).length, 0);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+t('a marked-unproven candidate is a complete append-only RESULT with no win metrics', () => {
+  const { base, localRoot, artifactRoot } = tempRoots();
+  try {
+    const published = publishExperimentResult({ localRoot, artifactRoot, ...unprovenCandidate() });
+    assert.equal(published.replayed, false);
+    assert.equal(published.result.autoplayPassed, false);
+    assert.deepEqual(published.result.autoplayOutcome, {
+      budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2,
+    });
+    assert.equal(published.result.autoplay, null);
+    assert.equal(published.result.playtestRuns, 2);
+    // The committed manifest re-verifies in full: unproven is a first-class RESULT.
+    assert.deepEqual(verifyWorkerResult(published.result, golden.input), published.result);
+    const replay = publishExperimentResult({ localRoot, artifactRoot, ...unprovenCandidate() });
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.result.resultDigest, published.result.resultDigest);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+t('publication is strictly WIN-only and rejects an unproven candidate with a typed cause', () => {
+  const { base, localRoot, artifactRoot } = tempRoots();
+  try {
+    const proven = publishExperimentResult({ localRoot, artifactRoot, ...candidate() });
+    assert.equal(assertPublishableWin(proven.result), proven.result);
+
+    const unproven = publishExperimentResult({ localRoot, artifactRoot, ...unprovenCandidate() });
+    assert.throws(
+      () => assertPublishableWin(unproven.result),
+      (error) => error.code === 'experiment_publish_unproven',
+    );
+    // A forged proven flag without matching win metrics also fails closed.
+    assert.throws(
+      () => assertPublishableWin({ ...unproven.result, autoplayPassed: true }),
+      (error) => error.code === 'experiment_publish_unproven',
+    );
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

@@ -51,6 +51,7 @@ function runtimeFields(result = golden.result) {
     title: result.title,
     concept,
     autoplayPassed: result.autoplayPassed,
+    autoplayOutcome: structuredClone(result.autoplayOutcome),
     wallTimeMs: result.wallTimeMs,
     agentInvocations: result.agentInvocations,
     playtestRuns: result.playtestRuns,
@@ -79,7 +80,7 @@ function resignFailure(mutate) {
 t('one generator-owned golden freezes contract, input, RESULT, ERROR and redaction', () => {
   assert.equal(
     createHash('sha256').update(goldenBytes).digest('hex'),
-    '7f6a06c0365d012664d933ef9d6836935ac6172f95fe7c69f22f13f730bf078c',
+    'c86959357c579638fe0b81f7c5e863a2c011c86ae2a92dacd10c965534d84587',
   );
   assert.deepEqual(EXPERIMENT_WORKER_CONTRACT_DEFINITION, golden.contractDefinition);
   assert.equal(EXPERIMENT_WORKER_CONTRACT_DIGEST, golden.expectedContractDigest);
@@ -137,6 +138,46 @@ t('input and output bindings fail closed under re-signing', () => {
     (body) => { body.agentSummary = 'Bearer secret-worker-token'; },
     (body) => { body.autoplay.runNumber = 3; },
     (body) => { body.conformance = { forged: true }; },
+  ]) {
+    assert.throws(() => verifyWorkerResult(resignResult(mutate), golden.input));
+  }
+});
+
+function makeUnproven(body) {
+  body.autoplayPassed = false;
+  body.autoplayOutcome = { budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2 };
+  body.playtestRuns = 2;
+  body.autoplay = null;
+}
+
+t('a marked-unproven RESULT is first-class and re-verifies through the contract', () => {
+  const unproven = resignResult(makeUnproven);
+  assert.deepEqual(verifyWorkerResult(unproven, golden.input), unproven);
+  assert.equal(unproven.autoplayPassed, false);
+  assert.equal(unproven.autoplay, null);
+  assert.deepEqual(unproven.autoplayOutcome, {
+    budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2,
+  });
+});
+
+t('autoplay outcome and metrics must agree, in both proven and unproven directions', () => {
+  for (const mutate of [
+    // unproven outcome but win metrics still present
+    (body) => { makeUnproven(body); body.autoplay = { durationMs: 11830, rafFrames: 710, runNumber: 2, visualStates: 4 }; },
+    // proven outcome but no win metrics
+    (body) => { body.autoplay = null; },
+    // autoplayPassed disagrees with outcome.proven
+    (body) => { body.autoplayPassed = false; },
+    // proven with the wrong reason
+    (body) => { body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'budget_exhausted' }; },
+    // unproven with the wrong reason
+    (body) => { makeUnproven(body); body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'win_proven' }; },
+    // playtestRuns disagrees with outcome.runs
+    (body) => { makeUnproven(body); body.playtestRuns = 1; },
+    // budgetSeconds out of bounds
+    (body) => { makeUnproven(body); body.autoplayOutcome = { ...body.autoplayOutcome, budgetSeconds: 5 }; },
+    // unknown reason token
+    (body) => { body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'timeout' }; },
   ]) {
     assert.throws(() => verifyWorkerResult(resignResult(mutate), golden.input));
   }

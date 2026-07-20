@@ -20,7 +20,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { assertHardenedExperimentHtml, installExternalNetworkDeny } from './hardening.mjs';
-import { sha256Hex, verifyWorkerResult } from './result-contract.mjs';
+import { assertPublishableWin, sha256Hex, verifyWorkerResult } from './result-contract.mjs';
 import { loadWorkerInputEnvelope, readFileExact } from './publish-local.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -247,6 +247,10 @@ if (typedResult) {
   // manifest re-validates in full and the captured bytes must replay every
   // digest it committed to, including the patch.
   verifyWorkerResult(manifest, workerInput);
+  // Publication is strictly WIN-only. An honestly-marked unproven candidate
+  // (autoplayOutcome.proven=false) is a legitimate review artifact but must
+  // never be published; this rejects it with a typed cause.
+  assertPublishableWin(manifest);
   const patchBytes = readFileExact(
     patchPath,
     'experiment patch',
