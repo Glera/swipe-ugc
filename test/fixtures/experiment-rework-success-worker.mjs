@@ -44,7 +44,7 @@ const published = publishExperimentResult({
       feeling: 'A readable release after tension.',
     },
     autoplayPassed: true,
-    autoplayOutcome: { budgetSeconds: 150, proven: true, reason: 'win_proven', runs: 1 },
+    autoplayOutcome: { budgetSeconds: 150, outcome: 'win', proven: true, reason: 'win_proven', runs: 1 },
     wallTimeMs: 1000,
     agentInvocations: 1,
     playtestRuns: 1,

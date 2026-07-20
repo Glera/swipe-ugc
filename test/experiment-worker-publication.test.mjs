@@ -72,7 +72,7 @@ function candidate({ suffix = '' } = {}) {
       title: golden.result.title,
       concept,
       autoplayPassed: true,
-      autoplayOutcome: { budgetSeconds: 150, proven: true, reason: 'win_proven', runs: 1 },
+      autoplayOutcome: { budgetSeconds: 150, outcome: 'win', proven: true, reason: 'win_proven', runs: 1 },
       wallTimeMs: 1000,
       agentInvocations: 1,
       playtestRuns: 1,
@@ -91,10 +91,10 @@ function candidate({ suffix = '' } = {}) {
 
 // A runtime-safe rework candidate whose fixed-seed autoplay exhausted its budget
 // without a WIN: a complete, honestly-marked RESULT with no win metrics.
-function unprovenCandidate({ suffix = 'unproven' } = {}) {
+function unprovenCandidate({ suffix = 'unproven', outcome = 'terminal_loss' } = {}) {
   const item = candidate({ suffix });
   item.fields.autoplayPassed = false;
-  item.fields.autoplayOutcome = { budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2 };
+  item.fields.autoplayOutcome = { budgetSeconds: 150, outcome, proven: false, reason: 'win_not_proven', runs: 2 };
   item.fields.playtestRuns = 2;
   item.fields.autoplay = null;
   return item;
@@ -326,7 +326,7 @@ t('a marked-unproven candidate is a complete append-only RESULT with no win metr
     assert.equal(published.replayed, false);
     assert.equal(published.result.autoplayPassed, false);
     assert.deepEqual(published.result.autoplayOutcome, {
-      budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2,
+      budgetSeconds: 150, outcome: 'terminal_loss', proven: false, reason: 'win_not_proven', runs: 2,
     });
     assert.equal(published.result.autoplay, null);
     assert.equal(published.result.playtestRuns, 2);

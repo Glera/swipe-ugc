@@ -34,6 +34,11 @@ import {
   hardenExperimentHtml,
   installExternalNetworkDeny,
 } from './hardening.mjs';
+import {
+  autoplayRunFailureKind,
+  combineAutoplayFailureKinds,
+  isTerminalLossEvent,
+} from './autoplay-outcome.mjs';
 import { modelInvocationArgs, normaliseModelInvocation } from './model-invocation.mjs';
 import {
   assertCompleteEvidence,
@@ -688,14 +693,21 @@ async function autoplay(html, attempt, runNumber) {
           if (errors.length) throw new Error(`AUTOPLAY ERRORS\n${errors.slice(0, 8).join('\n')}`);
           return { durationMs, rafFrames: lastState.rafFrames, visualStates: visualStates.size, runNumber };
         }
-        if (lastState.events.some((event) => /complet|lost|lose/i.test(String(event.type || '')) && event.success === false)) break;
+        if (lastState.events.some((event) => isTerminalLossEvent(event))) break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       if (externalAttempts.length) throw new Error(`NETWORK DENY: ${externalAttempts.slice(0, 8).join(', ')}`);
       if (lastState?.violations?.length) throw new Error(`CSP VIOLATION: ${lastState.violations.slice(0, 8).join(', ')}`);
       if (!lastState?.canvas) throw new Error(`RUNTIME FAILED: no canvas\nstate=${JSON.stringify(lastState)}`);
       if (errors.length) throw new Error(`RUNTIME FAILED during autoplay\nerrors=${JSON.stringify(errors.slice(0, 8))}\nstate=${JSON.stringify(lastState)}`);
-      throw new AutoplayIncompleteError(`Autoplay run ${runNumber} did not prove a win within ${Math.round(TEST_TIMEOUT_MS / 1000)}s`);
+      // Honest per-run classification from the same observed evidence: an early
+      // terminal loss is never recorded as an exhausted budget.
+      const failureKind = autoplayRunFailureKind({ events: lastState?.events || [] });
+      const incomplete = new AutoplayIncompleteError(failureKind === 'terminal_loss'
+        ? `Autoplay run ${runNumber} reached a terminal loss before proving a win`
+        : `Autoplay run ${runNumber} did not prove a win within ${Math.round(TEST_TIMEOUT_MS / 1000)}s`);
+      incomplete.kind = failureKind;
+      throw incomplete;
     } finally {
       await browser.close();
     }
@@ -708,9 +720,19 @@ async function autoplayWithFlakeRetry(html, attempt, onRun) {
     return { result: await autoplay(html, attempt, 1), runs: 1 };
   } catch (error) {
     if (!(error instanceof AutoplayIncompleteError)) throw error;
+    const firstKind = error.kind;
     status('test-retry', 'Autoplay was inconclusive; rerunning the same fixed build before spending another agent attempt', attempt);
     onRun();
-    return { result: await autoplay(html, attempt, 2), runs: 2 };
+    try {
+      return { result: await autoplay(html, attempt, 2), runs: 2 };
+    } catch (secondError) {
+      // Preserve both honest per-run kinds so the RESULT can say 'mixed' when
+      // the two runs genuinely disagreed (e.g. loss then timeout).
+      if (secondError instanceof AutoplayIncompleteError) {
+        secondError.kinds = [firstKind, secondError.kind];
+      }
+      throw secondError;
+    }
   }
 }
 
@@ -905,11 +927,16 @@ try {
   try {
     const playtest = await autoplayWithFlakeRetry(artifactHtml, 1, () => { playtestRuns++; });
     autoplayMetrics = playtest.result;
-    autoplayOutcome = { proven: true, reason: 'win_proven', budgetSeconds, runs: playtestRuns };
+    autoplayOutcome = { proven: true, reason: 'win_proven', outcome: 'win', budgetSeconds, runs: playtestRuns };
   } catch (error) {
     if (!(error instanceof AutoplayIncompleteError)) throw error;
-    autoplayOutcome = { proven: false, reason: 'budget_exhausted', budgetSeconds, runs: playtestRuns };
-    status('autoplay-unproven', `Build is healthy but autoplay could not prove a WIN within ${budgetSeconds}s; delivering a marked candidate for review`, 1);
+    // Honest cause, never a lie: a real deadline is 'timeout', a reported loss
+    // is 'terminal_loss', disagreeing retry runs are 'mixed'.
+    const unprovenOutcome = combineAutoplayFailureKinds(error.kinds ?? [error.kind]);
+    autoplayOutcome = {
+      proven: false, reason: 'win_not_proven', outcome: unprovenOutcome, budgetSeconds, runs: playtestRuns,
+    };
+    status('autoplay-unproven', `Build is healthy but autoplay did not prove a WIN (${unprovenOutcome}, budget ${budgetSeconds}s per run, ${playtestRuns} run(s)); delivering a marked candidate for review`, 1);
   }
   assertCompleteEvidence({
     validated,

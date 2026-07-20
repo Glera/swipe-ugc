@@ -9,6 +9,8 @@ import {
   EXPERIMENT_WORKER_CONTRACT_DEFINITION,
   EXPERIMENT_WORKER_CONTRACT_DIGEST,
   FEEDBACK_MAX,
+  LEGACY_WORKER_CONTRACT_DIGESTS,
+  assertPublishableWin,
   buildWorkerFailure,
   buildWorkerResult,
   canonicalJson,
@@ -19,6 +21,11 @@ import {
   verifyWorkerInput,
   verifyWorkerResult,
 } from '../worker/result-contract.mjs';
+import {
+  autoplayRunFailureKind,
+  combineAutoplayFailureKinds,
+  isTerminalLossEvent,
+} from '../worker/autoplay-outcome.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // The wire golden (and in the publication tests, the terminal parser) are
@@ -80,7 +87,7 @@ function resignFailure(mutate) {
 t('one generator-owned golden freezes contract, input, RESULT, ERROR and redaction', () => {
   assert.equal(
     createHash('sha256').update(goldenBytes).digest('hex'),
-    'c86959357c579638fe0b81f7c5e863a2c011c86ae2a92dacd10c965534d84587',
+    '67d272fcb30befe7136374d841786c28a8251ef4a7b064310449388321e00b3a',
   );
   assert.deepEqual(EXPERIMENT_WORKER_CONTRACT_DEFINITION, golden.contractDefinition);
   assert.equal(EXPERIMENT_WORKER_CONTRACT_DIGEST, golden.expectedContractDigest);
@@ -143,21 +150,23 @@ t('input and output bindings fail closed under re-signing', () => {
   }
 });
 
-function makeUnproven(body) {
+function makeUnproven(body, outcome = 'timeout', runs = 2) {
   body.autoplayPassed = false;
-  body.autoplayOutcome = { budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2 };
-  body.playtestRuns = 2;
+  body.autoplayOutcome = { budgetSeconds: 150, outcome, proven: false, reason: 'win_not_proven', runs };
+  body.playtestRuns = runs;
   body.autoplay = null;
 }
 
-t('a marked-unproven RESULT is first-class and re-verifies through the contract', () => {
-  const unproven = resignResult(makeUnproven);
-  assert.deepEqual(verifyWorkerResult(unproven, golden.input), unproven);
-  assert.equal(unproven.autoplayPassed, false);
-  assert.equal(unproven.autoplay, null);
-  assert.deepEqual(unproven.autoplayOutcome, {
-    budgetSeconds: 150, proven: false, reason: 'budget_exhausted', runs: 2,
-  });
+t('a marked-unproven RESULT is first-class for every honest cause', () => {
+  for (const [outcome, runs] of [['timeout', 2], ['terminal_loss', 1], ['mixed', 2]]) {
+    const unproven = resignResult((body) => makeUnproven(body, outcome, runs));
+    assert.deepEqual(verifyWorkerResult(unproven, golden.input), unproven);
+    assert.equal(unproven.autoplayPassed, false);
+    assert.equal(unproven.autoplay, null);
+    assert.deepEqual(unproven.autoplayOutcome, {
+      budgetSeconds: 150, outcome, proven: false, reason: 'win_not_proven', runs,
+    });
+  }
 });
 
 t('autoplay outcome and metrics must agree, in both proven and unproven directions', () => {
@@ -169,18 +178,107 @@ t('autoplay outcome and metrics must agree, in both proven and unproven directio
     // autoplayPassed disagrees with outcome.proven
     (body) => { body.autoplayPassed = false; },
     // proven with the wrong reason
-    (body) => { body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'budget_exhausted' }; },
+    (body) => { body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'win_not_proven' }; },
+    // proven with a non-win outcome
+    (body) => { body.autoplayOutcome = { ...body.autoplayOutcome, outcome: 'timeout' }; },
     // unproven with the wrong reason
     (body) => { makeUnproven(body); body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'win_proven' }; },
+    // unproven claiming a win outcome
+    (body) => { makeUnproven(body); body.autoplayOutcome = { ...body.autoplayOutcome, outcome: 'win' }; },
+    // mixed requires two genuinely disagreeing runs
+    (body) => { makeUnproven(body, 'mixed', 1); },
     // playtestRuns disagrees with outcome.runs
     (body) => { makeUnproven(body); body.playtestRuns = 1; },
     // budgetSeconds out of bounds
     (body) => { makeUnproven(body); body.autoplayOutcome = { ...body.autoplayOutcome, budgetSeconds: 5 }; },
-    // unknown reason token
-    (body) => { body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'timeout' }; },
+    // retired reason token from the r1 draft wire
+    (body) => { makeUnproven(body); body.autoplayOutcome = { ...body.autoplayOutcome, reason: 'budget_exhausted' }; },
   ]) {
     assert.throws(() => verifyWorkerResult(resignResult(mutate), golden.input));
   }
+});
+
+t('an early terminal loss is classified honestly and never as an exhausted budget', () => {
+  // The exact predicate/classifier the worker gate loop uses.
+  const lossEvent = { type: 'completed', success: false };
+  assert.equal(isTerminalLossEvent(lossEvent), true);
+  assert.equal(isTerminalLossEvent({ type: 'completed', success: true }), false);
+  assert.equal(isTerminalLossEvent({ type: 'level_lost', success: false }), true);
+  assert.equal(isTerminalLossEvent({ type: 'progress' }), false);
+  // Run that saw a loss seconds in => terminal_loss, not timeout.
+  assert.equal(autoplayRunFailureKind({ events: [{ type: 'progress' }, lossEvent] }), 'terminal_loss');
+  // Run that saw no terminal event before the deadline => a real timeout.
+  assert.equal(autoplayRunFailureKind({ events: [{ type: 'progress' }] }), 'timeout');
+  assert.equal(autoplayRunFailureKind({ events: [] }), 'timeout');
+  // Two agreeing runs keep their kind; disagreeing runs are mixed.
+  assert.equal(combineAutoplayFailureKinds(['terminal_loss', 'terminal_loss']), 'terminal_loss');
+  assert.equal(combineAutoplayFailureKinds(['timeout', 'timeout']), 'timeout');
+  assert.equal(combineAutoplayFailureKinds(['terminal_loss', 'timeout']), 'mixed');
+  assert.equal(combineAutoplayFailureKinds(['timeout']), 'timeout');
+  assert.throws(() => combineAutoplayFailureKinds(['mixed']), (error) => error.code === 'autoplay_outcome_invalid');
+  assert.throws(() => combineAutoplayFailureKinds([]), (error) => error.code === 'autoplay_outcome_invalid');
+});
+
+t('worker gate loop wires the honest classifier into break, throw, and retry aggregation', () => {
+  const source = readFileSync(path.join(here, '..', 'worker', 'experiment-rework.mjs'), 'utf8');
+  assert.ok(source.includes('lastState.events.some((event) => isTerminalLossEvent(event))'));
+  assert.ok(source.includes("autoplayRunFailureKind({ events: lastState?.events || [] })"));
+  assert.ok(source.includes('incomplete.kind = failureKind'));
+  assert.ok(source.includes('secondError.kinds = [firstKind, secondError.kind]'));
+  assert.ok(source.includes('combineAutoplayFailureKinds(error.kinds ?? [error.kind])'));
+  assert.ok(!source.includes('budget_exhausted'));
+});
+
+// P1 regression: real committed ready-jobs of the frozen v1 form (contract
+// digest ee838c67…) must stay exactly readable after the wire evolved. The
+// frozen legacy golden carries the exact historical byte form.
+const legacyGoldenPath = path.resolve(
+  here, '..', '..', 'swipe-generator', 'test', 'fixtures',
+  'experiment-worker-wire-v1-legacy.golden.json',
+);
+const LEGACY_SKIP = SIBLING_SKIP || (existsSync(legacyGoldenPath)
+  ? false
+  : 'sibling swipe-generator has no legacy golden yet (pre-migration checkout)');
+const tl = (name, fn) => test(name, { skip: LEGACY_SKIP }, fn);
+
+tl('frozen legacy v1 RESULT stays exactly readable and publishable-as-proven', () => {
+  const legacyBytes = readFileSync(legacyGoldenPath);
+  assert.equal(
+    createHash('sha256').update(legacyBytes).digest('hex'),
+    '7f6a06c0365d012664d933ef9d6836935ac6172f95fe7c69f22f13f730bf078c',
+  );
+  const legacy = JSON.parse(legacyBytes.toString('utf8'));
+  assert.deepEqual(LEGACY_WORKER_CONTRACT_DIGESTS, [legacy.expectedContractDigest]);
+  // The historical input verifies read-only under its frozen digest.
+  assert.deepEqual(verifyWorkerInput(legacy.input), legacy.input);
+  // The exact historical RESULT bytes re-verify — no quarantine.
+  assert.deepEqual(verifyWorkerResult(legacy.result, legacy.input), legacy.result);
+  assert.equal('autoplayOutcome' in legacy.result, false);
+  // A committed legacy WIN remains publishable; publication stays WIN-only.
+  assert.equal(assertPublishableWin(legacy.result), legacy.result);
+  // Authoring anything new under the legacy digest is refused.
+  const { feedback: _feedback, ...legacyConcept } = legacy.result.concept;
+  assert.throws(() => buildWorkerResult({
+    title: legacy.result.title,
+    concept: legacyConcept,
+    autoplayPassed: true,
+    autoplayOutcome: { budgetSeconds: 150, outcome: 'win', proven: true, reason: 'win_proven', runs: 2 },
+    wallTimeMs: 1,
+    agentInvocations: 1,
+    playtestRuns: 2,
+    conformance: structuredClone(legacy.result.conformance),
+    autoplay: structuredClone(legacy.result.autoplay),
+    files: [...legacy.result.files],
+    agentSummary: legacy.result.agentSummary,
+    createdAt: legacy.result.createdAt,
+    coverBytes: legacy.result.coverBytes,
+    artifact: structuredClone(legacy.result.artifact),
+  }, legacy.input), (error) => error.code === 'experiment_worker_contract_invalid');
+  // A legacy-form body can never smuggle an unproven candidate.
+  const { resultDigest: _legacyDigest, ...legacyBody } = structuredClone(legacy.result);
+  legacyBody.autoplayPassed = false;
+  const resigned = { ...legacyBody, resultDigest: digestOf(legacyBody) };
+  assert.throws(() => verifyWorkerResult(resigned, legacy.input));
 });
 
 t('failure re-signing and secret-bearing fixed points are rejected', () => {

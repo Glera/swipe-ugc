@@ -43,17 +43,29 @@ const RESULT_KEYS = [
   'requestId', 'resultDigest', 'schema', 'testSeed', 'title', 'url',
   'wallTimeMs', 'workerContractDigest',
 ];
+// Frozen historical v1 wire (contract digest ee838c67…): committed RESULTs of
+// that form exist in durable stores (real ready jobs). They stay exactly
+// readable forever; the verifier selects the form by the digest the immutable
+// input envelope was bound to. New RESULTs can only be authored in the current
+// form — see buildWorkerResult.
+export const LEGACY_WORKER_CONTRACT_DIGESTS = Object.freeze([
+  'sha256:ee838c6730d62bd897639c15e4a845346d2fd1cdc53eed033ce56eaa443df1f7',
+]);
+const LEGACY_RESULT_KEYS = RESULT_KEYS.filter((key) => key !== 'autoplayOutcome');
 const RESULT_PARENT_KEYS = ['experimentId', 'parentArtifactDigest', 'parentReviewDigest'];
 const ARTIFACT_KEYS = ['baseCommit', 'baselineId', 'baselineTree', 'coverSha256', 'htmlSha256', 'patchSha256'];
 const CONCEPT_KEYS = ['feedback', 'feeling', 'mechanic', 'pitch', 'prompt'];
 const CONFORMANCE_KEYS = ['idleMs', 'rafFrames'];
 const AUTOPLAY_KEYS = ['durationMs', 'rafFrames', 'runNumber', 'visualStates'];
 // A rework candidate can be runtime-safe with every other gate green yet still
-// exhaust its fixed-seed autoplay budget without proving a WIN. That outcome is
-// a first-class, honestly-marked RESULT (never an ERROR): proven=false keeps the
-// candidate reviewable while publication stays strictly WIN-only.
-const AUTOPLAY_OUTCOME_KEYS = ['budgetSeconds', 'proven', 'reason', 'runs'];
-const AUTOPLAY_OUTCOME_REASONS = ['budget_exhausted', 'win_proven'];
+// fail to prove a fixed-seed autoplay WIN. That is a first-class, honestly
+// marked RESULT (never an ERROR): reason is always win_not_proven, and the
+// separate outcome field records WHY — a real per-run timeout, a terminal loss
+// reached before the deadline, or mixed when two runs disagree. A terminal
+// loss must never masquerade as an exhausted budget.
+const AUTOPLAY_OUTCOME_KEYS = ['budgetSeconds', 'outcome', 'proven', 'reason', 'runs'];
+const AUTOPLAY_OUTCOME_REASONS = ['win_not_proven', 'win_proven'];
+const AUTOPLAY_UNPROVEN_OUTCOMES = ['mixed', 'terminal_loss', 'timeout'];
 const AUTOPLAY_BUDGET_SECONDS = [30, 3600];
 const FAILURE_KEYS = [
   'attemptUid', 'code', 'failureDigest', 'inputDigest', 'jobId', 'message',
@@ -158,11 +170,16 @@ export const EXPERIMENT_WORKER_CONTRACT_DEFINITION = deepFreeze({
   redactedFields: ['agentSummary', 'failure.message'],
   testSeedBinding: 'input.worker.testSeed=result.testSeed',
   autoplayOutcomeReasons: [...AUTOPLAY_OUTCOME_REASONS],
+  autoplayUnprovenOutcomes: [...AUTOPLAY_UNPROVEN_OUTCOMES],
+  legacyContractDigests: [...LEGACY_WORKER_CONTRACT_DIGESTS],
   evidenceRelations: [
     'autoplayPassed=autoplayOutcome.proven',
     'playtestRuns=autoplayOutcome.runs',
     'proven:autoplay.runNumber=playtestRuns',
+    'proven:outcome=win',
     'unproven:autoplay=null',
+    'unproven:outcome=mixed|terminal_loss|timeout',
+    'unproven:outcome=mixed=>runs=2',
   ],
 });
 
@@ -263,7 +280,11 @@ function normaliseInputBody(raw) {
     || value.baseline.sourceTree !== evidence.parentArtifact.baselineTree) {
     throw contractError('experiment_worker_contract_invalid', 'worker baseline differs from parent evidence');
   }
-  if (value.worker.contractDigest !== EXPERIMENT_WORKER_CONTRACT_DIGEST
+  // Historical committed inputs stay verifiable: their frozen legacy digest is
+  // accepted read-only. Authoring new work under a legacy digest is refused by
+  // buildWorkerResult, not here.
+  if ((value.worker.contractDigest !== EXPERIMENT_WORKER_CONTRACT_DIGEST
+    && !LEGACY_WORKER_CONTRACT_DIGESTS.includes(value.worker.contractDigest))
     || !DIGEST.test(String(value.worker.gateVersion || ''))) {
     throw contractError('experiment_worker_contract_invalid', 'worker contract or gate version is invalid');
   }
@@ -303,10 +324,11 @@ function validateMetrics(value, keys, label) {
   }
 }
 
-// Validates the honest autoplay evidence for a RESULT. A proven WIN keeps the
-// full win metrics; an unproven candidate (budget exhausted on a healthy build)
-// carries autoplay=null and a marked outcome. autoplayPassed always mirrors
-// autoplayOutcome.proven so no consumer can read one without the other.
+// Validates the honest autoplay evidence for a current-form RESULT. A proven
+// WIN keeps the full win metrics; an unproven candidate carries autoplay=null,
+// reason win_not_proven, and a truthful outcome (timeout / terminal_loss /
+// mixed). autoplayPassed always mirrors autoplayOutcome.proven so no consumer
+// can read one without the other.
 function validateAutoplayEvidence(body) {
   exactKeys(body.autoplayOutcome, AUTOPLAY_OUTCOME_KEYS, 'autoplayOutcome');
   const outcome = body.autoplayOutcome;
@@ -326,20 +348,41 @@ function validateAutoplayEvidence(body) {
     throw contractError('experiment_worker_result_invalid', 'playtestRuns differs from autoplayOutcome.runs');
   }
   if (outcome.proven) {
-    if (outcome.reason !== 'win_proven') {
-      throw contractError('experiment_worker_result_invalid', 'proven autoplay must record reason win_proven');
+    if (outcome.reason !== 'win_proven' || outcome.outcome !== 'win') {
+      throw contractError('experiment_worker_result_invalid', 'proven autoplay must record reason win_proven and outcome win');
     }
     validateMetrics(body.autoplay, AUTOPLAY_KEYS, 'autoplay');
     if (body.playtestRuns !== body.autoplay.runNumber) {
       throw contractError('experiment_worker_result_invalid', 'playtestRuns differs from autoplay.runNumber');
     }
   } else {
-    if (outcome.reason !== 'budget_exhausted') {
-      throw contractError('experiment_worker_result_invalid', 'unproven autoplay must record reason budget_exhausted');
+    if (outcome.reason !== 'win_not_proven') {
+      throw contractError('experiment_worker_result_invalid', 'unproven autoplay must record reason win_not_proven');
+    }
+    if (!AUTOPLAY_UNPROVEN_OUTCOMES.includes(outcome.outcome)) {
+      throw contractError('experiment_worker_result_invalid', 'unproven autoplay outcome must be timeout, terminal_loss, or mixed');
+    }
+    // mixed is only truthful when two runs genuinely disagreed.
+    if (outcome.outcome === 'mixed' && outcome.runs !== 2) {
+      throw contractError('experiment_worker_result_invalid', 'mixed autoplay outcome requires exactly two runs');
     }
     if (body.autoplay !== null) {
       throw contractError('experiment_worker_result_invalid', 'unproven autoplay must not carry win metrics');
     }
+  }
+}
+
+// Frozen historical v1 form (legacy digests): autoplayPassed was forced true,
+// win metrics were mandatory, and no autoplayOutcome key existed. Committed
+// RESULTs of that exact shape stay readable forever.
+function validateLegacyAutoplayEvidence(body) {
+  if (body.autoplayPassed !== true) {
+    throw contractError('experiment_worker_result_invalid', 'legacy worker RESULT requires a proven autoplay win');
+  }
+  validateMetrics(body.autoplay, AUTOPLAY_KEYS, 'autoplay');
+  count(body.playtestRuns, 'playtestRuns', { min: 1, max: 2 });
+  if (body.playtestRuns !== body.autoplay.runNumber) {
+    throw contractError('experiment_worker_result_invalid', 'playtestRuns differs from autoplay.runNumber');
   }
 }
 
@@ -354,8 +397,12 @@ function verifyBoundIdentity(value, input) {
 
 export function verifyWorkerResult(raw, expectedInput) {
   const input = verifyWorkerInput(expectedInput);
+  // The immutable input envelope names the exact frozen wire form this RESULT
+  // was committed under; the verifier follows it instead of quarantining
+  // historical evidence.
+  const legacy = LEGACY_WORKER_CONTRACT_DIGESTS.includes(input.worker.contractDigest);
   const value = structuredClone(raw);
-  exactKeys(value, RESULT_KEYS, 'worker RESULT');
+  exactKeys(value, legacy ? LEGACY_RESULT_KEYS : RESULT_KEYS, 'worker RESULT');
   if (value.schema !== WORKER_RESULT_SCHEMA || !DIGEST.test(String(value.resultDigest || ''))) {
     throw contractError('experiment_worker_result_invalid', 'worker RESULT identity is invalid');
   }
@@ -400,7 +447,8 @@ export function verifyWorkerResult(raw, expectedInput) {
     printable(body.concept[key], `concept.${key}`, { min: 0, max, maxBytes: max * 4 });
   }
   validateMetrics(body.conformance, CONFORMANCE_KEYS, 'conformance');
-  validateAutoplayEvidence(body);
+  if (legacy) validateLegacyAutoplayEvidence(body);
+  else validateAutoplayEvidence(body);
   count(body.wallTimeMs, 'wallTimeMs');
   count(body.coverBytes, 'coverBytes', { min: 1 });
   printable(body.title, 'title', { max: 60, maxBytes: 240 });
@@ -421,6 +469,10 @@ export function verifyWorkerResult(raw, expectedInput) {
 
 export function buildWorkerResult(runtimeFields, expectedInput) {
   const input = verifyWorkerInput(expectedInput);
+  // Legacy forms are read-only history. Authoring always uses the current wire.
+  if (input.worker.contractDigest !== EXPERIMENT_WORKER_CONTRACT_DIGEST) {
+    throw contractError('experiment_worker_contract_invalid', 'new worker RESULTs require the current contract digest');
+  }
   const runtime = structuredClone(runtimeFields);
   exactKeys(runtime, RUNTIME_RESULT_KEYS, 'worker runtime RESULT');
   const artifact = structuredClone(runtime.artifact);
@@ -551,10 +603,15 @@ export function assertCompleteEvidence({
 // Publication is strictly WIN-only. A marked-unproven candidate
 // (autoplayOutcome.proven=false) is a legitimate review artifact but must never
 // be published; this fails closed with a typed cause for every publish path.
+// A historical legacy-form RESULT has no autoplayOutcome key: its frozen wire
+// could only ever commit a proven WIN, so autoplayPassed===true is authoritative
+// there (the caller must have verified the RESULT form first).
 export function assertPublishableWin(result) {
-  if (!result || typeof result !== 'object'
-    || result.autoplayPassed !== true
-    || !result.autoplayOutcome || result.autoplayOutcome.proven !== true) {
+  const legacyProven = result && typeof result === 'object'
+    && !('autoplayOutcome' in result) && result.autoplayPassed === true;
+  const currentProven = result && typeof result === 'object'
+    && result.autoplayPassed === true && result.autoplayOutcome?.proven === true;
+  if (!legacyProven && !currentProven) {
     throw contractError(
       'experiment_publish_unproven',
       'candidate autoplay WIN is not proven; publication is WIN-only',
