@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -12,9 +12,14 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workspace = path.resolve(root, '..');
-const mainFile = path.join(workspace, 'playables-merge-raster-art', 'merge-locked-v1-swipe', 'src', 'main.ts');
+const mainFile = path.join(workspace, 'playables', 'merge-locked-v1-swipe', 'src', 'main.ts');
 
-test('trusted adapter changes only the art import boundary and removes Spine import', () => {
+// swipe-ugc is public while the source playable is private. The real-source
+// boundary check runs whenever the sibling checkout is available and skips in
+// standalone public CI; compiler/runtime fixtures below remain self-contained.
+test('trusted adapter changes only the art import boundary and removes Spine import', {
+  skip: !existsSync(mainFile),
+}, () => {
   const source = readFileSync(mainFile, 'utf8');
   const adapted = adaptMergeMainSource(source);
   assert.notEqual(adapted, source);

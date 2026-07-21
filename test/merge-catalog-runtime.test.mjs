@@ -62,11 +62,14 @@ function fixture(root) {
   writeFileSync(sourceQaFile, sourceQaBytes);
   writeFileSync(path.join(playables, 'scripts', 'stamp-runtime-artifact.mjs'), `
     import {createHash} from 'node:crypto';import {readFileSync,readdirSync,writeFileSync} from 'node:fs';import path from 'node:path';
-    const root=process.argv[2], digest='sha256:'+('9'.repeat(64));
+    const root=process.argv[2],placeholder='sha256:'+('0'.repeat(64)),domain=Buffer.from('swipe.runtime-artifact.normalized.v1\\0');
     const names=readdirSync(root).filter(name=>name!=='runtime-artifact.json').sort();
-    for(const name of names){const file=path.join(root,name),bytes=Buffer.from(readFileSync(file,'utf8').replaceAll('sha256:'+('0'.repeat(64)),digest));writeFileSync(file,bytes)}
+    const framed=createHash('sha256');framed.update(domain);
+    for(const name of names){const bytes=readFileSync(path.join(root,name)),n=Buffer.from(name),nl=Buffer.alloc(4),bl=Buffer.alloc(8);nl.writeUInt32BE(n.length);bl.writeBigUInt64BE(BigInt(bytes.length));framed.update(nl).update(n).update(bl).update(bytes)}
+    const digest='sha256:'+framed.digest('hex');
+    for(const name of names){const file=path.join(root,name),bytes=Buffer.from(readFileSync(file,'utf8').replaceAll(placeholder,digest));writeFileSync(file,bytes)}
     const files=names.map(name=>{const bytes=readFileSync(path.join(root,name));return{path:name,bytes:bytes.length,sha256:'sha256:'+createHash('sha256').update(bytes).digest('hex')}});
-    writeFileSync(path.join(root,'runtime-artifact.json'),JSON.stringify({schema:'runtime-artifact.v1',playableId:process.argv[3],digest,sourceCommit:process.argv[4],files}));
+    writeFileSync(path.join(root,'runtime-artifact.json'),JSON.stringify({schema:'runtime-artifact.v1',playableId:process.argv[3],digest,digestCanonicalization:'sorted-paths+u32-path-length+u64-byte-length; embedded digest normalized to sha256:000…000',sourceCommit:process.argv[4],files}));
   `);
   return { candidate, candidateFile, htmlFile, sourceQaFile, sourceQa, playables };
 }
@@ -140,7 +143,7 @@ test('promotes only adapter-QA-bound runtime bytes into the immutable platform l
     const manifest = buildMergeCatalogRuntime({
       ...value,
       outputRoot,
-      playablesRepo: path.resolve(repoRoot, '../playables'),
+      playablesRepo: value.playables,
       sourceCommit,
     });
     const runtimeRoot = path.join(outputRoot, manifest.runtimeArtifactDigest.slice(7));
