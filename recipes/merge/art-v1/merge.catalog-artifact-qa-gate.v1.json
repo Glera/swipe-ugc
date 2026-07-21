@@ -1,0 +1,26 @@
+{
+  "schema": "merge.catalog-artifact-qa-gate.v1",
+  "source": {
+    "schema": "merge.art-qa-report.v1",
+    "gameplayTerminalTraceEqual": true,
+    "baselineViewport": [390, 700],
+    "candidateViewports": [[390, 700], [844, 390]],
+    "ordersToWin": 3,
+    "gameplayEvents": ["progress", "progress", "progress"],
+    "performance": {
+      "minimumFrames": 120,
+      "maximumMedianFrameMs": 16.7,
+      "maximumP95FrameMs": 20,
+      "maximumLongFrameRatio": 0.01
+    }
+  },
+  "adapter": {
+    "schema": "merge.catalog-adapter-qa.v1",
+    "configured": true,
+    "completedCycle": true,
+    "gameplayEvents": ["progress", "progress", "progress"],
+    "externalRequestCount": 0,
+    "consoleErrorCount": 0,
+    "maximumMountMs": 15000
+  }
+}

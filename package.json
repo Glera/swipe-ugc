@@ -10,6 +10,9 @@
     "test:preview": "node worker/test-preview.mjs",
     "baseline:sort-qa:check": "node scripts/build-sort-level-qa-baseline.mjs --check",
     "baseline:sort-qa:write": "node scripts/build-sort-level-qa-baseline.mjs --write --source-gate",
+    "catalog-runtime:merge-art": "node scripts/build-merge-catalog-runtime.mjs",
+    "catalog-runtime:merge-art:qa": "node scripts/qa-merge-catalog-runtime.mjs",
+    "catalog-runtime:merge-art:promote": "node scripts/promote-merge-catalog-runtime.mjs",
     "verify": "npm run lint && npm test && node worker/bake.mjs --check-base && npm run test:preview"
   },
   "dependencies": {

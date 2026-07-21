@@ -1,0 +1,61 @@
+{
+  "schema": "merge.raster-runtime-contract.v1",
+  "levelSpecSchema": "merge.raster-level-spec.v1",
+  "levelSpecParams": [
+    "artifactClass",
+    "artPackHash",
+    "sourceRuntimeArtifactDigest",
+    "sourceHtmlSha256",
+    "templateContractDigest",
+    "compilerDigest",
+    "providerPolicyDigest",
+    "qaReportDigest",
+    "sourceQaEvidenceHash",
+    "gameplayFingerprint",
+    "presentationFingerprint"
+  ],
+  "catalogIdentity": {
+    "mechanic": "merge",
+    "variant": "raster-art-{artPackHash[0:12]}",
+    "multipleConcurrentWorlds": true
+  },
+  "catalogMarker": {
+    "levelConfig": "catalog_required",
+    "expectedSpecHash": "lowercase-sha256"
+  },
+  "handshake": {
+    "ready": [
+      "type",
+      "nonce",
+      "runtimeContractDigest",
+      "runtimeArtifactDigest"
+    ],
+    "configure": [
+      "type",
+      "nonce",
+      "spec"
+    ],
+    "configured": [
+      "type",
+      "appliedSpecHash",
+      "runtimeContractDigest",
+      "runtimeArtifactDigest"
+    ],
+    "failureReasons": [
+      "contract",
+      "digest",
+      "mount",
+      "origin",
+      "runtime",
+      "timeout"
+    ]
+  },
+  "runtime": {
+    "reviewedInnerHtml": "exact-captured-bytes",
+    "mountAfterConfigure": true,
+    "firstRevealAfterInnerReady": true,
+    "relayPlayableMessages": true,
+    "relaySwipeCommands": true,
+    "remoteUrls": false
+  }
+}

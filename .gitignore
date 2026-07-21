@@ -1,4 +1,5 @@
 node_modules/
+.local-catalog-runtimes/
 .DS_Store
 .local-experiments/
 u/local-experiments/
