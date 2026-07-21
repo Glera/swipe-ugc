@@ -34,7 +34,7 @@ if (options.out !== path.resolve(options.runtimeRoot, String(manifest.adapterQaP
 const indexFile = path.join(runtimeRoot, 'index.html');
 if (!statSync(indexFile).isFile()) throw new Error('merge_catalog_adapter_index_missing');
 
-const hostHtml = `<!doctype html><meta charset="utf-8"><iframe id="game"></iframe><script>
+const hostHtml = `<!doctype html><meta charset="utf-8"><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;overflow:hidden}</style><iframe id="game"></iframe><script>
   const spec=${JSON.stringify(manifest.levelSpec)};
   const frame=document.getElementById('game');
   window.__adapterMessages=[];
@@ -106,11 +106,16 @@ try {
     await route.continue();
   });
   await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__adapterMessages.filter(item => item.data?.type === 'progress').length >= 3,
-    null,
-    { timeout: options.timeoutSeconds * 1000 },
-  );
+  try {
+    await page.waitForFunction(
+      () => window.__adapterMessages.filter(item => item.data?.type === 'progress').length >= 3,
+      null,
+      { timeout: options.timeoutSeconds * 1000 },
+    );
+  } catch (error) {
+    const messages = await page.evaluate(() => window.__adapterMessages || []);
+    throw new Error(`merge_catalog_adapter_cycle_timeout: messages=${JSON.stringify(messages.slice(-24))}; console=${JSON.stringify(consoleErrors.slice(-12))}; cause=${error.message}`);
+  }
   const observed = await page.evaluate(() => ({
     startedAt: window.__adapterStartedAt,
     messages: window.__adapterMessages,
