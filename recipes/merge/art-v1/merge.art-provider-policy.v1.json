@@ -1,0 +1,25 @@
+{
+  "schema": "merge.art-provider-policy.v1",
+  "provider": "openai.builtin-imagegen.v1",
+  "executionMode": "operator-started-supervised",
+  "billing": {
+    "currency": "USD",
+    "maximumMarginalCostMicrosPerWorld": 0,
+    "unknownPriceBehavior": "deny",
+    "basis": "bundled-product-entitlement-no-api-key"
+  },
+  "limits": {
+    "maximumCallsPerWorld": 9,
+    "maximumWorldsPerCampaign": 2,
+    "maximumGeneratedSourceBytesPerWorld": 62914560,
+    "maximumWallMinutesPerWorld": 90
+  },
+  "content": {
+    "allowText": false,
+    "allowLogos": false,
+    "allowCharacters": false,
+    "transparentSourceBackground": "#00FF00",
+    "subjectMarginsPercent": 8,
+    "progressionMustBeMonotonic": true
+  }
+}

@@ -2,3 +2,5 @@ node_modules/
 .DS_Store
 .local-experiments/
 u/local-experiments/
+.local-merge-art-packs*/
+.local-merge-artifacts*/

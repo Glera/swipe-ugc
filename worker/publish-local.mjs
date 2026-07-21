@@ -259,7 +259,7 @@ export function loadParentClosure({ localRoot, artifactRoot, expectedArtifact })
   };
 }
 
-function commitFile(stagedPath, finalPath, label, { stagedRoot, finalRoot }) {
+export function commitFile(stagedPath, finalPath, label, { stagedRoot, finalRoot }) {
   try {
     linkSync(stagedPath, finalPath);
     return 'created';

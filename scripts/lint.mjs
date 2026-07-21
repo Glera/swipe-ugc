@@ -5,6 +5,13 @@ import { fileURLToPath } from 'url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = [
   'recipes/sort/recipe.mjs',
+  'recipes/merge/art-v1/contract.mjs',
+  'recipes/merge/art-v1/compiler.mjs',
+  'recipes/merge/art-v1/lab-candidate.mjs',
+  'scripts/compile-merge-art.mjs',
+  'scripts/prepare-merge-art-pack.mjs',
+  'scripts/publish-merge-art-lab-candidate.mjs',
+  'scripts/qa-merge-art.mjs',
   'worker/hardening.mjs',
   'worker/bake.mjs',
   'worker/capture-cover.mjs',

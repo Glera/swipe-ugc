@@ -1,0 +1,55 @@
+{
+  "schema": "merge.art-template.v1",
+  "mechanicId": "merge-locked-v1-swipe",
+  "source": {
+    "repository": "playables",
+    "commit": "231ec0432f77b4d1b9b842ff6ed0528e00bf89fd",
+    "tree": "6fcc34863aba38379e8565bd876a20980a5eadbc",
+    "buildStamp": "2026-07-20 16:37",
+    "playablePath": "merge-locked-v1-swipe",
+    "playableTree": "6a74c48ae21a0d50ffac31cfef45cd6c9ce8dec9"
+  },
+  "runtime": {
+    "renderer": "merge.static-art-runtime.v1",
+    "characterMode": "provided-static-rgba",
+    "forbiddenModules": ["spine-player", "spine-assets", "spine-webgl-3.7"],
+    "gameplaySourcePolicy": "exact-base-plus-trusted-art-adapter"
+  },
+  "generatedSources": {
+    "backgroundPortrait": { "kind": "opaque-scene", "aspect": "9:16", "minimumWidth": 768, "minimumHeight": 1024 },
+    "backgroundLandscape": { "kind": "opaque-scene", "aspect": "16:9", "minimumWidth": 1024, "minimumHeight": 576 },
+    "generator": { "kind": "transparent-cutout", "minimumWidth": 512, "minimumHeight": 512 },
+    "lockStage1": { "kind": "transparent-cutout", "minimumWidth": 512, "minimumHeight": 512 },
+    "lockStage2": { "kind": "transparent-cutout", "minimumWidth": 512, "minimumHeight": 512 },
+    "chain1Sheet": { "kind": "progression-sheet", "count": 7, "columns": 7, "rows": 1, "minimumCellSize": 192 },
+    "chain2Sheet": { "kind": "progression-sheet", "count": 4, "columns": 4, "rows": 1, "minimumCellSize": 256 },
+    "chain3Sheet": { "kind": "progression-sheet", "count": 3, "columns": 3, "rows": 1, "minimumCellSize": 256 },
+    "chain4Sheet": { "kind": "progression-sheet", "count": 3, "columns": 3, "rows": 1, "minimumCellSize": 256 }
+  },
+  "compiledSlots": {
+    "backgroundPortrait": { "format": "webp", "width": 768, "height": 1365, "alpha": false },
+    "backgroundLandscape": { "format": "webp", "width": 1365, "height": 768, "alpha": false },
+    "generator": { "format": "webp", "width": 512, "height": 512, "alpha": true },
+    "lockStage1": { "format": "webp", "width": 512, "height": 512, "alpha": true },
+    "lockStage2": { "format": "webp", "width": 512, "height": 512, "alpha": true },
+    "chain1": { "format": "webp", "count": 7, "width": 384, "height": 384, "alpha": true },
+    "chain2": { "format": "webp", "count": 4, "width": 384, "height": 384, "alpha": true },
+    "chain3": { "format": "webp", "count": 3, "width": 384, "height": 384, "alpha": true },
+    "chain4": { "format": "webp", "count": 3, "width": 384, "height": 384, "alpha": true }
+  },
+  "providedCharacters": [
+    { "slot": "order-1", "path": "provided/characters/order-1.png", "sha256": "d25e6657e9b844cd775ed6d2cf052f55a822bb3f04a5d1862b1dd366823950ec", "width": 440, "height": 840 },
+    { "slot": "order-2", "path": "provided/characters/order-2.png", "sha256": "71c1acd55aad2986f476f21f513f417cadab32a823b35b0ea91772c6c910e00c", "width": 440, "height": 840 },
+    { "slot": "order-3", "path": "provided/characters/order-3.png", "sha256": "3d186ef7c2a38579b05d45956ef9c01a10acdaf3d61e02f454dba119775699fc", "width": 440, "height": 840 }
+  ],
+  "qa": {
+    "requiredViewports": [
+      { "name": "portrait", "width": 390, "height": 700 },
+      { "name": "landscape", "width": 844, "height": 390 }
+    ],
+    "requiredTerminalOutcome": "won",
+    "requireGameplayTraceEquality": true,
+    "requireNoSpineBytes": true,
+    "requireAuthorBlindReview": true
+  }
+}

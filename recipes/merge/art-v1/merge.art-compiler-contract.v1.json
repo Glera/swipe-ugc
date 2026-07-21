@@ -1,0 +1,35 @@
+{
+  "schema": "merge.art-compiler-contract.v1",
+  "compiler": "merge.raster-art-compiler.v1",
+  "normalization": {
+    "library": "python3-pillow",
+    "resample": "LANCZOS",
+    "backgroundFit": "cover-center",
+    "cutoutFit": "alpha-bbox-contain-84-percent",
+    "webpQuality": 90,
+    "webpMethod": 6
+  },
+  "adapter": {
+    "allowedSourceEdits": [
+      "merge-locked-v1-swipe/src/main.ts",
+      "merge-locked-v1-swipe/src/generated-art-pack.ts",
+      "merge-locked-v1-swipe/src/static-art-player.ts",
+      "merge-locked-v1-swipe/assets/generated/<artPackHash>/**"
+    ],
+    "forbiddenGameplayTokens": [
+      "CHAIN_MAX_LEVEL",
+      "GAME_DURATION",
+      "ORDER_MIN_TIME",
+      "ORDER_MAX_TIME",
+      "randomOrderTargets",
+      "findDropTarget",
+      "completeFulfill"
+    ]
+  },
+  "artifact": {
+    "target": "swipe",
+    "runtimeDigest": "stamp-runtime-artifact.v1",
+    "networkPolicy": "same-origin-only",
+    "manifestLast": true
+  }
+}
