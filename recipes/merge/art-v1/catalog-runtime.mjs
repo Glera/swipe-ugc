@@ -95,6 +95,8 @@ function runtimeHtml({ candidate, sourceQa, innerHtmlBase64, runtimeArtifactDige
     runtimeArtifactDigest,
     specHash: spec.specHash,
   });
+  const bridge = `<script>(()=>{const send=(type,detail={})=>parent.postMessage({source:'playable',type,...detail},'*');addEventListener('message',async event=>{if(event.source!==parent)return;const data=event.data;if(!data||data.target!=='playable-swipe')return;const api=window.__playable||{},swipe=api.swipe||{};try{if(data.type==='prepareInteractive'){await (swipe.prepareInteractive||api.prepareInteractive)?.();send('interactive_ready')}else if(data.type==='setHostPaused'){(api.setHostPaused||swipe.setHostPaused)?.(data.paused===true)}else if(data.type==='startAutoPlay'){(swipe.startAutoPlay||api.startAutoPlay)?.({immediate:true})}else if(data.type==='stopAutoPlay'){(swipe.stopAutoPlay||api.stopAutoPlay)?.()}else if(data.type==='restart'){swipe.restart?.({instant:true})}}catch{send('host_command_failed',{command:String(data.type||'unknown')})}});send('catalog_bridge_ready')})()<\/script>`;
+  const bridgeLiteral = JSON.stringify(bridge).replaceAll('<', '\\u003c');
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; frame-src blob:; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:">
@@ -103,6 +105,7 @@ function runtimeHtml({ candidate, sourceQa, innerHtmlBase64, runtimeArtifactDige
 'use strict';
 const E=${embedded};
 const B='${innerHtmlBase64}';
+const G=${bridgeLiteral};
 const qs=new URL(location.href).searchParams;
 const parentOrigin=(()=>{try{const value=new URL(document.referrer).origin;return value&&value!=='null'?value:null}catch{return null}})();
 const failure=document.getElementById('failure');
@@ -113,17 +116,16 @@ const exact=(o,k)=>o&&typeof o==='object'&&!Array.isArray(o)&&Object.keys(o).sor
 const canon=(v)=>{if(v===null)return'null';if(typeof v==='string')return JSON.stringify(v);if(typeof v==='number'){if(!Number.isFinite(v))throw new Error('number');return JSON.stringify(v)}if(typeof v==='boolean')return v?'true':'false';if(Array.isArray(v))return'['+v.map(canon).join(',')+']';if(typeof v==='object')return'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}';throw new Error('type')};
 const hex=async(v)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canon(v))))).map(x=>x.toString(16).padStart(2,'0')).join('');
 const nonce=Array.from(crypto.getRandomValues(new Uint8Array(16))).map(x=>x.toString(16).padStart(2,'0')).join('');
-let terminal=false,child=null,configured=false;
+let terminal=false,child=null,configured=false,innerReady=false,bridgeReady=false;
 const forward=(data)=>{try{parent.postMessage(data,parentOrigin)}catch{}};
+const ready=()=>{if(configured||!innerReady||!bridgeReady)return;configured=true;terminal=true;clearTimeout(timer);child.dataset.ready='true';forward({type:'configured',appliedSpecHash:E.specHash,runtimeContractDigest:E.runtimeContractDigest,runtimeArtifactDigest:E.runtimeArtifactDigest})};
 const timer=setTimeout(()=>{if(!terminal){terminal=true;fail('timeout')}},15000);
 addEventListener('message',async(ev)=>{
   if(child&&ev.source===child.contentWindow){
     const data=ev.data;
     if(data&&typeof data==='object'&&data.source==='playable'){
-      if(!configured&&(data.type==='static_ready'||data.type==='interactive_ready'||data.type==='ready')){
-        configured=true;terminal=true;clearTimeout(timer);child.dataset.ready='true';
-        forward({type:'configured',appliedSpecHash:E.specHash,runtimeContractDigest:E.runtimeContractDigest,runtimeArtifactDigest:E.runtimeArtifactDigest});
-      }
+      if(data.type==='catalog_bridge_ready'){bridgeReady=true;ready();return}
+      if(data.type==='static_ready'||data.type==='interactive_ready'||data.type==='ready'){innerReady=true;ready()}
       if(configured)forward(data);
     }
     return;
@@ -139,7 +141,8 @@ addEventListener('message',async(ev)=>{
     const bytes=Uint8Array.from(atob(B),char=>char.charCodeAt(0));
     const digest='sha256:'+Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join('');
     if(digest!==E.sourceHtmlSha256)throw new Error('inner');
-    child=document.createElement('iframe');child.setAttribute('sandbox','allow-scripts');child.src=URL.createObjectURL(new Blob([bytes],{type:'text/html'}));document.getElementById('mount').appendChild(child);
+    const source=new TextDecoder('utf-8',{fatal:true}).decode(bytes);const marker='</body>';const bridged=source.includes(marker)?source.replace(marker,G+marker):source+G;
+    child=document.createElement('iframe');child.setAttribute('sandbox','allow-scripts');child.src=URL.createObjectURL(new Blob([bridged],{type:'text/html'}));document.getElementById('mount').appendChild(child);
   }catch{terminal=true;clearTimeout(timer);fail('contract')}
 });
 forward({type:'configure_ready',nonce,runtimeContractDigest:E.runtimeContractDigest,runtimeArtifactDigest:E.runtimeArtifactDigest});

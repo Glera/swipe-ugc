@@ -51,7 +51,7 @@
     ]
   },
   "runtime": {
-    "reviewedInnerHtml": "exact-captured-bytes",
+    "reviewedInnerHtml": "exact-captured-bytes-plus-fixed-command-bridge",
     "mountAfterConfigure": true,
     "firstRevealAfterInnerReady": true,
     "relayPlayableMessages": true,

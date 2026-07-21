@@ -32,8 +32,7 @@ function fixture(root) {
   mkdirSync(path.join(playables, 'scripts'), { recursive: true });
   const inner = Buffer.from(`<!doctype html><script>
     parent.postMessage({source:'playable',type:'static_ready'},'*');
-    for(let i=0;i<3;i++) parent.postMessage({source:'playable',type:'progress'},'*');
-    addEventListener('message',event=>{if(event.data?.target==='playable-swipe')parent.postMessage({source:'playable',type:'command_seen',command:event.data.type},'*')});
+    window.__playable={swipe:{startAutoPlay(){for(let i=0;i<3;i++)parent.postMessage({source:'playable',type:'progress'},'*');parent.postMessage({source:'playable',type:'command_seen',command:'startAutoPlay'},'*')}}};
   </script>`);
   const pack = 'a'.repeat(64);
   const candidate = {
@@ -109,11 +108,12 @@ test('builds one content-addressed runtime and proves exact configure/relay beha
       await page.waitForFunction(() => window.messages.some(item => item?.type === 'configured'));
       const messages = await page.evaluate(() => window.messages);
       assert.equal(messages.filter(item => item?.type === 'configured').length, 1);
-      assert.equal(messages.filter(item => item?.type === 'progress').length, 3);
       assert.equal(messages.find(item => item?.type === 'configured').appliedSpecHash, first.levelSpec.specHash);
       assert.deepEqual(external, []);
-      await page.locator('#game').evaluate(element => element.contentWindow.postMessage({ target: 'playable-swipe', type: 'prepareInteractive' }, '*'));
+      await page.locator('#game').evaluate(element => element.contentWindow.postMessage({ target: 'playable-swipe', type: 'startAutoPlay' }, '*'));
       await page.waitForFunction(() => window.messages.some(item => item?.type === 'command_seen'));
+      const afterCommand = await page.evaluate(() => window.messages);
+      assert.equal(afterCommand.filter(item => item?.type === 'progress').length, 3);
     } finally {
       await browser.close();
       await new Promise(resolvePromise => server.close(resolvePromise));
