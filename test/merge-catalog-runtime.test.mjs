@@ -16,6 +16,7 @@ import {
   mergeRasterRuntimeContractDigest,
   mergeRasterVariant,
 } from '../recipes/merge/art-v1/catalog-runtime.mjs';
+import { canonicalize } from '../recipes/merge/art-v1/contract.mjs';
 import { promoteMergeCatalogRuntime } from '../scripts/promote-merge-catalog-runtime.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
@@ -60,10 +61,12 @@ function fixture(root) {
   writeFileSync(htmlFile, inner);
   writeFileSync(sourceQaFile, sourceQaBytes);
   writeFileSync(path.join(playables, 'scripts', 'stamp-runtime-artifact.mjs'), `
-    import {createHash} from 'node:crypto';import {readFileSync,writeFileSync} from 'node:fs';import path from 'node:path';
-    const root=process.argv[2], digest='sha256:'+('9'.repeat(64)), file=path.join(root,'index.html');
-    const bytes=Buffer.from(readFileSync(file,'utf8').replaceAll('sha256:'+('0'.repeat(64)),digest));writeFileSync(file,bytes);
-    writeFileSync(path.join(root,'runtime-artifact.json'),JSON.stringify({schema:'runtime-artifact.v1',playableId:process.argv[3],digest,sourceCommit:process.argv[4],files:[{path:'index.html',bytes:bytes.length,sha256:'sha256:'+createHash('sha256').update(bytes).digest('hex')}]}));
+    import {createHash} from 'node:crypto';import {readFileSync,readdirSync,writeFileSync} from 'node:fs';import path from 'node:path';
+    const root=process.argv[2], digest='sha256:'+('9'.repeat(64));
+    const names=readdirSync(root).filter(name=>name!=='runtime-artifact.json').sort();
+    for(const name of names){const file=path.join(root,name),bytes=Buffer.from(readFileSync(file,'utf8').replaceAll('sha256:'+('0'.repeat(64)),digest));writeFileSync(file,bytes)}
+    const files=names.map(name=>{const bytes=readFileSync(path.join(root,name));return{path:name,bytes:bytes.length,sha256:'sha256:'+createHash('sha256').update(bytes).digest('hex')}});
+    writeFileSync(path.join(root,'runtime-artifact.json'),JSON.stringify({schema:'runtime-artifact.v1',playableId:process.argv[3],digest,sourceCommit:process.argv[4],files}));
   `);
   return { candidate, candidateFile, htmlFile, sourceQaFile, sourceQa, playables };
 }
@@ -143,19 +146,22 @@ test('promotes only adapter-QA-bound runtime bytes into the immutable platform l
     const runtimeRoot = path.join(outputRoot, manifest.runtimeArtifactDigest.slice(7));
     const qaFile = path.join(runtimeRoot, manifest.adapterQaPath);
     mkdirSync(path.dirname(qaFile), { recursive: true });
-    writeFileSync(qaFile, `${JSON.stringify({
+    const qa = {
       schema: 'merge.catalog-adapter-qa.v1',
       runtimeContractDigest: manifest.runtimeContractDigest,
       runtimeArtifactDigest: manifest.runtimeArtifactDigest,
       specHash: manifest.levelSpec.specHash,
       sourceHtmlSha256: manifest.sourceHtmlSha256,
+      sourceQaDocumentDigest: manifest.levelSpec.params.qaReportDigest,
+      sourceQaEvidenceHash: manifest.levelSpec.params.sourceQaEvidenceHash,
       configured: true,
       completedCycle: true,
       gameplayEvents: [{ type: 'progress' }, { type: 'progress' }, { type: 'progress' }],
       externalRequestCount: 0,
       consoleErrorCount: 0,
       mountMs: 120,
-    }, null, 2)}\n`);
+    };
+    writeFileSync(qaFile, canonicalize(qa));
     const platformRoot = path.join(temp, 'platform');
     mkdirSync(platformRoot);
     const checked = promoteMergeCatalogRuntime({ runtimeRoot, platformRoot });
@@ -169,7 +175,9 @@ test('promotes only adapter-QA-bound runtime bytes into the immutable platform l
     assert.equal(replayed.status, 'replayed');
     assert.deepEqual(replayed.descriptor, created.descriptor);
     const releaseRoot = path.join(platformRoot, created.target);
-    assert.deepEqual(readdirSync(releaseRoot).sort(), ['index.html', 'runtime-artifact.json', 'runtime-release.json']);
+    assert.deepEqual(readdirSync(releaseRoot).sort(), [
+      'bridge.js', 'index.html', 'inner.html', 'runtime-artifact.json', 'runtime-release.json',
+    ]);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }

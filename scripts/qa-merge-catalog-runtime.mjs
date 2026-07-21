@@ -6,6 +6,8 @@ import path from 'node:path';
 
 import { chromium } from 'playwright';
 
+import { canonicalize, sha256Bytes } from '../recipes/merge/art-v1/contract.mjs';
+
 const options = { timeoutSeconds: 105 };
 for (let index = 2; index < process.argv.length; index += 2) {
   const name = process.argv[index];
@@ -33,6 +35,15 @@ if (options.out !== path.resolve(options.runtimeRoot, String(manifest.adapterQaP
 }
 const indexFile = path.join(runtimeRoot, 'index.html');
 if (!statSync(indexFile).isFile()) throw new Error('merge_catalog_adapter_index_missing');
+const sourceQaFile = path.join(options.runtimeRoot, String(manifest.sourceQaPath || ''));
+const sourceQaBytes = readFileSync(sourceQaFile);
+const sourceQa = JSON.parse(sourceQaBytes.toString('utf8'));
+const sourceQaDocumentDigest = `sha256:${sha256Bytes(sourceQaBytes)}`;
+const sourceQaEvidenceHash = sha256Bytes(Buffer.from(canonicalize(sourceQa), 'utf8'));
+if (sourceQaDocumentDigest !== manifest.levelSpec?.params?.qaReportDigest
+  || sourceQaEvidenceHash !== manifest.levelSpec?.params?.sourceQaEvidenceHash) {
+  throw new Error('merge_catalog_adapter_source_qa_mismatch');
+}
 
 const hostHtml = `<!doctype html><meta charset="utf-8"><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;overflow:hidden}</style><iframe id="game"></iframe><script>
   const spec=${JSON.stringify(manifest.levelSpec)};
@@ -142,6 +153,8 @@ try {
     runtimeArtifactDigest: manifest.runtimeArtifactDigest,
     specHash: manifest.levelSpec.specHash,
     sourceHtmlSha256: manifest.sourceHtmlSha256,
+    sourceQaDocumentDigest,
+    sourceQaEvidenceHash,
     configured: true,
     completedCycle: true,
     gameplayEvents: progress.map(() => ({ type: 'progress' })),
@@ -150,7 +163,7 @@ try {
     mountMs,
   };
   mkdirSync(path.dirname(options.out), { recursive: true });
-  writeFileSync(options.out, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
+  writeFileSync(options.out, canonicalize(report), { flag: 'wx' });
   console.log(JSON.stringify(report, null, 2));
   await page.close();
 } finally {

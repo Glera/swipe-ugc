@@ -47,7 +47,8 @@ function exactKeys(value, keys) {
 function assertAdapterQa(report, manifest) {
   if (!exactKeys(report, [
     'schema', 'runtimeContractDigest', 'runtimeArtifactDigest', 'specHash',
-    'sourceHtmlSha256', 'configured', 'completedCycle', 'gameplayEvents',
+    'sourceHtmlSha256', 'sourceQaDocumentDigest', 'sourceQaEvidenceHash',
+    'configured', 'completedCycle', 'gameplayEvents',
     'externalRequestCount', 'consoleErrorCount', 'mountMs',
   ])
     || report.schema !== 'merge.catalog-adapter-qa.v1'
@@ -55,6 +56,8 @@ function assertAdapterQa(report, manifest) {
     || report.runtimeArtifactDigest !== manifest.runtimeArtifactDigest
     || report.specHash !== manifest.levelSpec?.specHash
     || report.sourceHtmlSha256 !== manifest.sourceHtmlSha256
+    || report.sourceQaDocumentDigest !== manifest.levelSpec?.params?.qaReportDigest
+    || report.sourceQaEvidenceHash !== manifest.levelSpec?.params?.sourceQaEvidenceHash
     || report.configured !== true
     || report.completedCycle !== true
     || JSON.stringify(report.gameplayEvents) !== JSON.stringify([{ type: 'progress' }, { type: 'progress' }, { type: 'progress' }])
@@ -113,7 +116,7 @@ export function promoteMergeCatalogRuntime({
     wrapperMetadata: [],
   });
   if (runtime.manifest.sourceCommit !== manifest.sourceCommit
-    || JSON.stringify(runtime.executablePaths) !== JSON.stringify(['index.html'])) {
+    || JSON.stringify(runtime.executablePaths) !== JSON.stringify(['bridge.js', 'index.html', 'inner.html'])) {
     fail('merge_catalog_runtime_closure_invalid');
   }
   const sourceQaBytes = readRegular(path.join(root, manifest.sourceQaPath), 'merge_catalog_source_qa_missing');
@@ -121,7 +124,11 @@ export function promoteMergeCatalogRuntime({
     fail('merge_catalog_source_qa_digest_mismatch');
   }
   const qaBytes = readRegular(path.join(root, manifest.adapterQaPath), 'merge_catalog_adapter_qa_missing');
-  assertAdapterQa(parse(qaBytes, 'merge_catalog_adapter_qa_invalid'), manifest);
+  const qa = parse(qaBytes, 'merge_catalog_adapter_qa_invalid');
+  assertAdapterQa(qa, manifest);
+  if (!qaBytes.equals(Buffer.from(canonicalize(qa), 'utf8'))) {
+    fail('merge_catalog_adapter_qa_not_canonical');
+  }
   let sourceTree;
   try {
     sourceTree = execFileSync('git', ['rev-parse', `${manifest.sourceCommit}:${SOURCE_PATH}`], {
@@ -152,7 +159,9 @@ export function promoteMergeCatalogRuntime({
   };
   const descriptorBytes = Buffer.from(canonicalize(descriptor), 'utf8');
   const files = new Map([
+    ['bridge.js', readRegular(path.join(root, 'runtime/bridge.js'), 'merge_catalog_runtime_bridge_missing')],
     ['index.html', readRegular(path.join(root, manifest.indexPath), 'merge_catalog_runtime_index_missing')],
+    ['inner.html', readRegular(path.join(root, 'runtime/inner.html'), 'merge_catalog_runtime_inner_missing')],
     ['runtime-artifact.json', readRegular(path.join(root, manifest.sidecarPath), 'merge_catalog_runtime_sidecar_missing')],
     ['runtime-release.json', descriptorBytes],
   ]);

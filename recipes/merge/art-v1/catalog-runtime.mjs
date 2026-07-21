@@ -96,16 +96,19 @@ function runtimeHtml({ candidate, sourceQa, innerHtmlBase64, runtimeArtifactDige
     specHash: spec.specHash,
   });
   const bridge = `<script>(()=>{const send=(type,detail={})=>parent.postMessage({source:'playable',type,...detail},'*');addEventListener('message',async event=>{if(event.source!==parent)return;const data=event.data;if(!data||data.target!=='playable-swipe')return;const api=window.__playable||{},swipe=api.swipe||{};try{if(data.type==='prepareInteractive'){await (swipe.prepareInteractive||api.prepareInteractive)?.();send('interactive_ready')}else if(data.type==='setHostPaused'){(api.setHostPaused||swipe.setHostPaused)?.(data.paused===true)}else if(data.type==='startAutoPlay'){(swipe.startAutoPlay||api.startAutoPlay)?.({immediate:true})}else if(data.type==='stopAutoPlay'){(swipe.stopAutoPlay||api.stopAutoPlay)?.()}else if(data.type==='restart'){swipe.restart?.({instant:true})}}catch{send('host_command_failed',{command:String(data.type||'unknown')})}});send('catalog_bridge_ready')})()<\/script>`;
-  const bridgeLiteral = JSON.stringify(bridge).replaceAll('<', '\\u003c');
-  return `<!doctype html>
+  const source = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(innerHtmlBase64, 'base64'));
+  const marker = '</body>';
+  const markerAt = source.toLowerCase().lastIndexOf(marker);
+  const innerHtml = markerAt < 0
+    ? `${source}${bridge}`
+    : `${source.slice(0, markerAt)}${bridge}${source.slice(markerAt)}`;
+  const output = `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; frame-src blob:; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; frame-src 'self'; img-src data:; style-src 'unsafe-inline'">
 <style>html,body,#mount,iframe{margin:0;width:100%;height:100%;border:0;overflow:hidden;background:#111}iframe{visibility:hidden}iframe[data-ready="true"]{visibility:visible}#failure{display:none;position:fixed;inset:0;z-index:9;place-items:center;background:#2f3650;color:#fff;font:700 18px/1.3 system-ui}</style>
 </head><body><div id="mount"></div><div id="failure">World unavailable</div><script>(()=>{
 'use strict';
 const E=${embedded};
-const B='${innerHtmlBase64}';
-const G=${bridgeLiteral};
 const qs=new URL(location.href).searchParams;
 const parentOrigin=(()=>{try{const value=new URL(document.referrer).origin;return value&&value!=='null'?value:null}catch{return null}})();
 const failure=document.getElementById('failure');
@@ -138,15 +141,15 @@ addEventListener('message',async(ev)=>{
     if(!exact(data,['type','nonce','spec'])||data.nonce!==nonce)throw new Error('wire');
     const specValue=data.spec;
     if(!exact(specValue,['schema','specHash','runtimeContractDigest','seed','params'])||specValue.schema!=='merge.raster-level-spec.v1'||specValue.runtimeContractDigest!==E.runtimeContractDigest||specValue.seed!==0||!exact(specValue.params,['artifactClass','artPackHash','sourceRuntimeArtifactDigest','sourceHtmlSha256','templateContractDigest','compilerDigest','providerPolicyDigest','qaReportDigest','sourceQaEvidenceHash','gameplayFingerprint','presentationFingerprint'])||specValue.params.artifactClass!=='merge-raster-art-v1'||specValue.params.artPackHash!==E.artPackHash||specValue.params.sourceHtmlSha256!==E.sourceHtmlSha256||await hex({schema:specValue.schema,runtimeContractDigest:specValue.runtimeContractDigest,seed:specValue.seed,params:specValue.params})!==specValue.specHash||specValue.specHash!==E.specHash||specValue.specHash!==qs.get('expected_spec_hash'))throw new Error('spec');
-    const bytes=Uint8Array.from(atob(B),char=>char.charCodeAt(0));
-    const digest='sha256:'+Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join('');
-    if(digest!==E.sourceHtmlSha256)throw new Error('inner');
-    const source=new TextDecoder('utf-8',{fatal:true}).decode(bytes);const marker='</body>';const bridged=source.includes(marker)?source.replace(marker,G+marker):source+G;
-    child=document.createElement('iframe');child.setAttribute('sandbox','allow-scripts');child.src=URL.createObjectURL(new Blob([bridged],{type:'text/html'}));document.getElementById('mount').appendChild(child);
+    child=document.createElement('iframe');child.setAttribute('sandbox','allow-scripts');child.src='inner.html';document.getElementById('mount').appendChild(child);
   }catch{terminal=true;clearTimeout(timer);fail('contract')}
 });
 forward({type:'configure_ready',nonce,runtimeContractDigest:E.runtimeContractDigest,runtimeArtifactDigest:E.runtimeArtifactDigest});
 })()</script></body></html>`;
+  const outerScript = /<script>([\s\S]*)<\/script><\/body><\/html>$/.exec(output)?.[1];
+  if (!outerScript) throw new Error('merge_catalog_outer_script_missing');
+  const indexHtml = output.replace(`<script>${outerScript}</script>`, '<script src="bridge.js"></script>');
+  return Object.freeze({ indexHtml, bridgeScript: outerScript, innerHtml });
 }
 
 function command(commandName, args, cwd) {
@@ -191,11 +194,15 @@ export function buildMergeCatalogRuntime({
     mkdirSync(evidenceRoot);
   try {
     const placeholder = `sha256:${'0'.repeat(64)}`;
-    writeFileSync(
-      join(runtimeRoot, 'index.html'),
-      runtimeHtml({ candidate, sourceQa, innerHtmlBase64: html.toString('base64'), runtimeArtifactDigest: placeholder }),
-      { flag: 'wx' },
-    );
+    const documents = runtimeHtml({
+      candidate,
+      sourceQa,
+      innerHtmlBase64: html.toString('base64'),
+      runtimeArtifactDigest: placeholder,
+    });
+    writeFileSync(join(runtimeRoot, 'index.html'), documents.indexHtml, { flag: 'wx' });
+    writeFileSync(join(runtimeRoot, 'bridge.js'), documents.bridgeScript, { flag: 'wx' });
+    writeFileSync(join(runtimeRoot, 'inner.html'), documents.innerHtml, { flag: 'wx' });
     const playables = resolve(String(playablesRepo || ''));
     command(
       'node',
